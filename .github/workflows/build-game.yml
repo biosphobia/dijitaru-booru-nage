@@ -1,0 +1,74 @@
+name: Build game downloads
+
+# Windows and macOS builds of the Godot game.
+# - Every push to main (and manual runs) refreshes the rolling
+#   "latest" pre-release, so there is always a direct download link.
+# - Pushing a tag like v1.0 creates a proper versioned release.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Godot and export templates
+        run: |
+          curl -sSL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q godot.zip
+          sudo mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" /usr/local/bin/godot
+          curl -sSL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -q templates.tpz -d /tmp/templates
+          mv /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
+      - name: Import project resources
+        run: godot --headless --path godot --import || true
+
+      - name: Export Windows build
+        run: |
+          mkdir -p build/windows
+          godot --headless --path godot --export-release "Windows Desktop" ../build/windows/DijitaruBooruNage.exe
+          cd build/windows
+          zip -r ../DijitaruBooruNage-windows.zip .
+
+      - name: Export macOS build
+        run: |
+          mkdir -p build
+          godot --headless --path godot --export-release "macOS" ../build/DijitaruBooruNage-macos.zip
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-builds
+          path: build/*.zip
+
+      - name: Update rolling "latest" release
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          prerelease: true
+          body: |
+            Automatic build of the newest game version.
+            - Windows: download `DijitaruBooruNage-windows.zip`, unzip, run the .exe
+            - macOS: download `DijitaruBooruNage-macos.zip`, unzip, right-click the app > Open
+              (first launch only - the app is unsigned)
+          files: build/*.zip
+
+      - name: Create versioned release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.zip

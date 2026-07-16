@@ -1,5 +1,6 @@
 {
   "camera_index": 0,
+  "fourcc": "MJPG",
   "capture_width": 1280,
   "capture_height": 720,
   "capture_fps": 60,

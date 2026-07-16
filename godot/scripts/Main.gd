@@ -1,41 +1,37 @@
 extends Node2D
-## Minimal test game: colored circle targets pop up, a click (mouse or ball
-## hit via BallInput) knocks them down.
+## Minimal test game: a white ball appears at a random point on a solid blue
+## background. A click (mouse, or a real ping pong ball hit routed through
+## BallInput) pops it and a new one appears somewhere else.
+##
+## Every click also shows a small ripple at the cursor position, so you can
+## see exactly where a thrown ball registered - even when it misses.
 ##
 ## Keys:
 ##   C      - toggle the calibration pattern
+##   F      - toggle fullscreen
 ##   Escape - quit
 
-const TargetScene := preload("res://scripts/Target.gd")
+const BallScene := preload("res://scripts/Ball.gd")
 const CalibrationScene := preload("res://scripts/CalibrationScreen.gd")
 
-const MAX_TARGETS := 5
-const SPAWN_INTERVAL := 1.5
-const PALETTE := {
-	"red": Color(0.90, 0.15, 0.15),
-	"orange": Color(1.00, 0.55, 0.10),
-	"yellow": Color(0.95, 0.85, 0.10),
-	"green": Color(0.15, 0.75, 0.25),
-	"blue": Color(0.15, 0.40, 0.90),
-}
+const BACKGROUND := Color(0.07, 0.32, 0.85)
+const RESPAWN_DELAY := 0.6
 
 var score := 0
 
 var _score_label: Label
 var _calibration: CanvasLayer
-var _targets: Node2D
+var _ball: Area2D = null
+var _respawn_left := 0.0
 
 func _ready() -> void:
 	var bg := ColorRect.new()
-	bg.color = Color(0.10, 0.10, 0.14)
+	bg.color = BACKGROUND
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	var bg_layer := CanvasLayer.new()
 	bg_layer.layer = -1
 	bg_layer.add_child(bg)
 	add_child(bg_layer)
-
-	_targets = Node2D.new()
-	add_child(_targets)
 
 	var ui := CanvasLayer.new()
 	_score_label = Label.new()
@@ -44,10 +40,9 @@ func _ready() -> void:
 	_score_label.add_theme_font_size_override("font_size", 36)
 	ui.add_child(_score_label)
 	var hint := Label.new()
-	hint.text = "C = calibration screen"
+	hint.text = "C = calibration   F = fullscreen"
 	hint.add_theme_font_size_override("font_size", 18)
 	hint.modulate = Color(1, 1, 1, 0.5)
-	hint.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	hint.position = Vector2(20, get_viewport_rect().size.y - 40)
 	ui.add_child(hint)
 	add_child(ui)
@@ -56,65 +51,67 @@ func _ready() -> void:
 	_calibration.visible = false
 	add_child(_calibration)
 
-	var timer := Timer.new()
-	timer.wait_time = SPAWN_INTERVAL
-	timer.timeout.connect(_spawn_target)
-	add_child(timer)
-	timer.start()
-
-	BallInput.ball_hit.connect(_on_ball_hit)
+func _process(delta: float) -> void:
+	if _calibration.visible or is_instance_valid(_ball):
+		return
+	_respawn_left -= delta
+	if _respawn_left <= 0.0:
+		_spawn_ball()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed \
+			and event.button_index == MOUSE_BUTTON_LEFT and not _calibration.visible:
+		_show_ripple(event.position)
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_C:
 				_calibration.visible = not _calibration.visible
+			KEY_F:
+				_toggle_fullscreen()
 			KEY_ESCAPE:
 				get_tree().quit()
 
-func _spawn_target() -> void:
-	if _calibration.visible:
-		return
-	var alive := 0
-	for child in _targets.get_children():
-		if not child._falling:
-			alive += 1
-	if alive >= MAX_TARGETS:
-		return
-	var target := TargetScene.new()
-	var color_name: String = PALETTE.keys().pick_random()
-	target.color = PALETTE[color_name]
+func _spawn_ball() -> void:
+	var ball := BallScene.new()
 	var vp := get_viewport_rect().size
-	var margin := TargetScene.RADIUS + 30.0
-	target.position = Vector2(
+	var margin := BallScene.RADIUS + 40.0
+	ball.position = Vector2(
 		randf_range(margin, vp.x - margin),
 		randf_range(margin + 60.0, vp.y - margin)
 	)
-	target.knocked_down.connect(_on_target_knocked)
-	_targets.add_child(target)
+	ball.popped.connect(_on_ball_popped)
+	add_child(ball)
+	_ball = ball
 
-func _on_target_knocked() -> void:
+func _on_ball_popped() -> void:
 	score += 1
 	_score_label.text = "Score: %d" % score
+	_respawn_left = RESPAWN_DELAY
 
-## Debug feedback: flash a small ring wherever the vision script reports a
-## hit, so you can see raw hit positions even when no target is there.
-func _on_ball_hit(pos: Vector2, color: String) -> void:
-	var flash := HitFlash.new()
-	flash.position = pos
-	flash.color = PALETTE.get(color, Color.WHITE)
-	add_child(flash)
+## Small expanding-ring effect wherever a click landed.
+func _show_ripple(pos: Vector2) -> void:
+	var ripple := Ripple.new()
+	ripple.position = pos
+	add_child(ripple)
 
-class HitFlash extends Node2D:
-	var color := Color.WHITE
+func _toggle_fullscreen() -> void:
+	var window := get_window()
+	if window.mode == Window.MODE_FULLSCREEN:
+		window.mode = Window.MODE_WINDOWED
+	else:
+		window.mode = Window.MODE_FULLSCREEN
+
+class Ripple extends Node2D:
+	const LIFETIME := 0.4
 	var _age := 0.0
 
 	func _process(delta: float) -> void:
 		_age += delta
-		if _age > 0.5:
+		if _age >= LIFETIME:
 			queue_free()
 		queue_redraw()
 
 	func _draw() -> void:
-		var t := _age / 0.5
-		draw_arc(Vector2.ZERO, 20.0 + 60.0 * t, 0.0, TAU, 40, Color(color, 1.0 - t), 5.0)
+		var t := _age / LIFETIME
+		draw_arc(Vector2.ZERO, 14.0 + 55.0 * t, 0.0, TAU, 40,
+			Color(1.0, 1.0, 1.0, 0.9 * (1.0 - t)), 5.0)

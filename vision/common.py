@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 
 import cv2
 import numpy as np
@@ -50,9 +51,32 @@ def load_calibration():
 
 
 def open_camera(config):
-    cam = cv2.VideoCapture(config.get("camera_index", 0))
+    index = config.get("camera_index", 0)
+
+    # Pick the native backend per OS: AVFoundation on macOS (required for
+    # camera-permission prompts to work properly), DirectShow on Windows
+    # (much faster startup and lets MJPG reach 60 fps on most webcams).
+    if sys.platform == "darwin":
+        backend = cv2.CAP_AVFOUNDATION
+    elif sys.platform.startswith("win"):
+        backend = cv2.CAP_DSHOW
+    else:
+        backend = cv2.CAP_ANY
+
+    cam = cv2.VideoCapture(index, backend)
+    if not cam.isOpened() and backend != cv2.CAP_ANY:
+        cam = cv2.VideoCapture(index)  # fall back to whatever OpenCV picks
     if not cam.isOpened():
-        raise SystemExit("Could not open camera index %s" % config.get("camera_index", 0))
+        raise SystemExit(
+            "Could not open camera index %s. On macOS, make sure the terminal "
+            "app has Camera permission (System Settings > Privacy & Security "
+            "> Camera)." % index
+        )
+
+    # MJPG lets most USB webcams deliver 720p at 60 fps instead of 5-30.
+    fourcc = config.get("fourcc", "MJPG")
+    if fourcc:
+        cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
     cam.set(cv2.CAP_PROP_FRAME_WIDTH, config.get("capture_width", 1280))
     cam.set(cv2.CAP_PROP_FRAME_HEIGHT, config.get("capture_height", 720))
     cam.set(cv2.CAP_PROP_FPS, config.get("capture_fps", 60))

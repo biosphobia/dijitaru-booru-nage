@@ -15,21 +15,44 @@ webcam -> vision/detect.py -> UDP {"type":"hit","x":0.42,"y":0.61,"color":"red"}
 
 ## Parts
 
-- `godot/` — Godot 4.3 project: a minimal test game (colored circle targets,
-  click to knock down), the calibration pattern screen, and the
-  `BallInput.gd` autoload that receives hits.
+- `godot/` — Godot 4.3 project: the test game (a white ball appears at a
+  random point on a blue background; a hit pops it and a new one appears),
+  the calibration pattern screen, and the `BallInput.gd` autoload that
+  receives hits.
 - `vision/` — Python: `calibrate.py` (homography calibration),
   `detect.py` (ball tracker), `test_hit.py` (send a fake hit, no camera needed).
 
-## Setup
+## Download the game (no install)
 
-1. Install [Godot 4.x](https://godotengine.org) and Python 3.9+.
+Grab the newest build from the
+[Releases page](../../releases) — every push to `main` refreshes the
+**Latest build** pre-release:
+
+- **Windows**: download `DijitaruBooruNage-windows.zip`, unzip anywhere,
+  double-click the `.exe`. No installation.
+- **macOS**: download `DijitaruBooruNage-macos.zip`, unzip, then
+  **right-click the app > Open** the first time (the app is unsigned, so
+  a normal double-click is blocked by Gatekeeper once). If macOS still
+  refuses: `xattr -cr "Dijitaru Booru Nage.app"` in a terminal.
+
+Works on Windows and macOS (Intel and Apple Silicon). The vision script is
+plain Python and runs on Windows, macOS and Linux.
+
+## Setup from source (for developing the game)
+
+1. Install [Godot 4.3+](https://godotengine.org) and Python 3.9+.
 2. `pip install -r vision/requirements.txt`
-3. Open `godot/project.godot` in Godot and run it (F5). Put the window on
-   the projector, ideally fullscreen.
-4. Place the webcam so it sees the **whole projected image** (next to the
+3. Open `godot/project.godot` in Godot and run it (F5).
+
+## Physical setup
+
+1. Run the game on the projector and press **F** for fullscreen.
+2. Place the webcam so it sees the **whole projected image** (next to the
    projector is easiest). Fix it in place — if the camera or projector
    moves, recalibrate.
+3. macOS only: the first time you run a vision script, macOS asks for
+   Camera permission for your terminal app — allow it (System Settings >
+   Privacy & Security > Camera).
 
 ## Calibrate (do this once per setup)
 
@@ -47,7 +70,8 @@ python vision/detect.py
 ```
 
 Throw a ball at the wall. Each detected impact prints `HIT {...}` in the
-terminal, flashes a ring in the game, and clicks whatever it landed on.
+terminal and clicks the game at that spot: a small ripple shows where the
+hit landed, and if it hit the ball, the ball pops and a new one appears.
 
 No camera handy? Test the game side alone:
 
