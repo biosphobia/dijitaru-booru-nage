@@ -12,16 +12,18 @@ import sys
 from common import load_config
 
 
-def main():
-    if len(sys.argv) < 3:
+def main(args=None):
+    if args is None:
+        args = sys.argv[1:]
+    if len(args) < 2:
         print(__doc__)
         raise SystemExit(1)
     config = load_config()
     packet = {
         "type": "hit",
-        "x": float(sys.argv[1]),
-        "y": float(sys.argv[2]),
-        "color": sys.argv[3] if len(sys.argv) > 3 else "unknown",
+        "x": float(args[0]),
+        "y": float(args[1]),
+        "color": args[2] if len(args) > 2 else "unknown",
     }
     addr = (config.get("udp_host", "127.0.0.1"), config.get("udp_port", 4242))
     socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(

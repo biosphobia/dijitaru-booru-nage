@@ -22,27 +22,42 @@ webcam -> vision/detect.py -> UDP {"type":"hit","x":0.42,"y":0.61,"color":"red"}
 - `vision/` — Python: `calibrate.py` (homography calibration),
   `detect.py` (ball tracker), `test_hit.py` (send a fake hit, no camera needed).
 
-## Download the game (no install)
+## Download everything (zero install)
 
-Grab the newest build from the
-[Releases page](../../releases) — every push to `main` refreshes the
-**Latest build** pre-release:
+Grab the newest builds from the [Releases page](../../releases) — every
+push to `main` refreshes the **Latest build** pre-release. Nothing needs
+to be installed on the PC, not even Python: download, unzip, run.
 
-- **Windows**: download `DijitaruBooruNage-windows.zip`, unzip anywhere,
-  double-click the `.exe`. No installation.
-- **macOS**: download `DijitaruBooruNage-macos.zip`, unzip, then
+**The game** (put on the PC driving the projector):
+
+- **Windows**: `DijitaruBooruNage-windows.zip` — unzip anywhere,
+  double-click the `.exe`.
+- **macOS**: `DijitaruBooruNage-macos.zip` — unzip, then
   **right-click the app > Open** the first time (the app is unsigned, so
   a normal double-click is blocked by Gatekeeper once). If macOS still
   refuses: `xattr -cr "Dijitaru Booru Nage.app"` in a terminal.
 
-Works on Windows and macOS (Intel and Apple Silicon). The vision script is
-plain Python and runs on Windows, macOS and Linux.
+**The camera tool** (same PC, the one the webcam is plugged into) — a
+single portable executable with calibrate/detect built in:
 
-## Setup from source (for developing the game)
+- **Windows**: `BooruVision-windows.zip` — unzip, double-click
+  `BooruVision.exe`, pick from the menu (1 = calibrate, 2 = detect). If
+  SmartScreen complains: "More info" > "Run anyway".
+- **macOS**: `BooruVision-macos-applesilicon.zip` (M1/M2/M3/M4) or
+  `BooruVision-macos-intel.zip` (older Intel Macs) — unzip, run
+  `xattr -cr BooruVision` in Terminal once, then double-click it.
+
+`config.json` (tuning) and `calibration.json` are created **next to the
+executable** on first run, so the whole thing lives in one folder — a USB
+stick works fine.
+
+## Setup from source (for developing)
 
 1. Install [Godot 4.3+](https://godotengine.org) and Python 3.9+.
 2. `pip install -r vision/requirements.txt`
-3. Open `godot/project.godot` in Godot and run it (F5).
+3. Open `godot/project.godot` in Godot and run it (F5). The Python
+   entry points are `vision/calibrate.py` and `vision/detect.py` (or
+   `vision/app.py` for the menu).
 
 ## Physical setup
 
