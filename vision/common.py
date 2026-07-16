@@ -7,9 +7,45 @@ import sys
 import cv2
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+# When frozen into a portable executable (PyInstaller), keep config and
+# calibration next to the .exe so the whole thing lives in one folder.
+if getattr(sys, "frozen", False):
+    HERE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 CALIBRATION_PATH = os.path.join(HERE, "calibration.json")
+
+DEFAULT_CONFIG = {
+    "camera_index": 0,
+    "fourcc": "MJPG",
+    "capture_width": 1280,
+    "capture_height": 720,
+    "capture_fps": 60,
+    "udp_host": "127.0.0.1",
+    "udp_port": 4242,
+    "preview": True,
+    "detection": {
+        "mode": "reversal",
+        "processing_width": 640,
+        "diff_threshold": 25,
+        "min_area": 30,
+        "max_area": 2500,
+        "min_circularity": 0.4,
+        "min_speed": 6.0,
+        "max_match_dist": 90.0,
+        "track_timeout_frames": 5,
+        "cooldown_ms": 250,
+        "cooldown_radius": 0.06,
+    },
+    "colors": [
+        {"name": "red", "h_min": 170, "h_max": 10, "s_min": 80, "v_min": 60},
+        {"name": "orange", "h_min": 11, "h_max": 25, "s_min": 80, "v_min": 60},
+        {"name": "yellow", "h_min": 26, "h_max": 40, "s_min": 80, "v_min": 60},
+        {"name": "green", "h_min": 41, "h_max": 85, "s_min": 60, "v_min": 50},
+        {"name": "blue", "h_min": 95, "h_max": 130, "s_min": 60, "v_min": 50},
+    ],
+}
 
 # Normalized game-screen coordinates of the four ArUco marker CENTERS shown
 # by the Godot calibration screen (godot/scripts/CalibrationScreen.gd).
@@ -25,6 +61,10 @@ ARUCO_DICT = cv2.aruco.DICT_4X4_50
 
 
 def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(DEFAULT_CONFIG, f, indent=2)
+        print("Created default config:", CONFIG_PATH)
     with open(CONFIG_PATH) as f:
         return json.load(f)
 

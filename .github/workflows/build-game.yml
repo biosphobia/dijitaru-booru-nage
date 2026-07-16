@@ -1,9 +1,12 @@
 name: Build game downloads
 
-# Windows and macOS builds of the Godot game.
-# - Every push to main (and manual runs) refreshes the rolling
-#   "latest" pre-release, so there is always a direct download link.
-# - Pushing a tag like v1.0 creates a proper versioned release.
+# Portable, zero-install builds of everything:
+# - the Godot game for Windows and macOS
+# - the BooruVision camera tool (calibrate/detect) as a single executable
+#   for Windows and macOS - no Python needed on the target PC
+#
+# Every push to main (and manual runs) refreshes the rolling "latest"
+# pre-release. Pushing a tag like v1.0 creates a versioned release.
 
 on:
   push:
@@ -15,10 +18,8 @@ env:
   GODOT_VERSION: "4.3"
 
 jobs:
-  export:
+  game:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -47,28 +48,93 @@ jobs:
           mkdir -p build
           godot --headless --path godot --export-release "macOS" ../build/DijitaruBooruNage-macos.zip
 
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: game-builds
           path: build/*.zip
 
+  vision:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: macos-applesilicon
+          - os: macos-15-intel
+            name: macos-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build portable executable
+        working-directory: vision
+        run: |
+          pip install -r requirements.txt pyinstaller
+          pyinstaller --onefile --console --name BooruVision app.py
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        working-directory: vision/dist
+        run: Compress-Archive -Path BooruVision.exe -DestinationPath "../../BooruVision-${{ matrix.name }}.zip"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        working-directory: vision/dist
+        run: zip -r "../../BooruVision-${{ matrix.name }}.zip" BooruVision
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vision-${{ matrix.name }}
+          path: BooruVision-*.zip
+
+  release:
+    needs: [game, vision]
+    # Run even if one matrix build failed, so the other downloads still ship.
+    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+          merge-multiple: true
+
+      - name: List downloads
+        run: ls -la downloads
+
       - name: Update rolling "latest" release
-        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest build
           prerelease: true
           body: |
-            Automatic build of the newest game version.
-            - Windows: download `DijitaruBooruNage-windows.zip`, unzip, run the .exe
-            - macOS: download `DijitaruBooruNage-macos.zip`, unzip, right-click the app > Open
-              (first launch only - the app is unsigned)
-          files: build/*.zip
+            Automatic build of the newest version. Nothing to install - download, unzip, run.
+
+            **Game** (put this on the projector PC):
+            - Windows: `DijitaruBooruNage-windows.zip` - unzip, run the .exe
+            - macOS: `DijitaruBooruNage-macos.zip` - unzip, right-click the app > Open (first launch only)
+
+            **Camera tool** (same PC, needs the webcam):
+            - Windows: `BooruVision-windows.zip` - unzip, double-click `BooruVision.exe`, pick from the menu.
+              If Windows SmartScreen complains: "More info" > "Run anyway".
+            - macOS: `BooruVision-macos-applesilicon.zip` (M1/M2/M3/M4) or `BooruVision-macos-intel.zip`
+              (older Intel Macs) - unzip, then first time run `xattr -cr BooruVision` in Terminal,
+              then double-click it.
+
+            Config and calibration files are created next to the executable on first run.
+          files: downloads/*.zip
 
       - name: Create versioned release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: build/*.zip
+          files: downloads/*.zip
