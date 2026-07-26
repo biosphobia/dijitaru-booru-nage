@@ -28,28 +28,44 @@ Grab the newest builds from the [Releases page](../../releases) — every
 push to `main` refreshes the **Latest build** pre-release. Nothing needs
 to be installed on the PC, not even Python: download, unzip, run.
 
-**The game** (put on the PC driving the projector):
-
-- **Windows**: `DijitaruBooruNage-windows.zip` — unzip anywhere,
-  double-click the `.exe`.
-- **macOS**: `DijitaruBooruNage-macos.zip` — unzip, then
-  **right-click the app > Open** the first time (the app is unsigned, so
-  a normal double-click is blocked by Gatekeeper once). If macOS still
-  refuses: `xattr -cr "Dijitaru Booru Nage.app"` in a terminal.
-
-**The camera tool** (same PC, the one the webcam is plugged into) — a
-single portable executable with calibrate/detect built in:
-
-- **Windows**: `BooruVision-windows.zip` — unzip, double-click
+- **Game**: `DijitaruBooruNage-windows.zip` — unzip anywhere,
+  double-click the `.exe`. Put it on the PC driving the projector.
+- **Camera tool**: `BooruVision-windows.zip` — a single portable
+  executable with calibrate/detect built in. Unzip, double-click
   `BooruVision.exe`, pick from the menu (1 = calibrate, 2 = detect). If
   SmartScreen complains: "More info" > "Run anyway".
-- **macOS**: `BooruVision-macos-applesilicon.zip` (M1/M2/M3/M4) or
-  `BooruVision-macos-intel.zip` (older Intel Macs) — unzip, run
-  `xattr -cr BooruVision` in Terminal once, then double-click it.
 
 `config.json` (tuning) and `calibration.json` are created **next to the
 executable** on first run, so the whole thing lives in one folder — a USB
 stick works fine.
+
+Builds are currently Windows-only (macOS is on hold; the export presets
+are still in the repo).
+
+## Using a PS3 Eye camera (recommended)
+
+The PS3 Eye is a great tracking camera — cheap and it does a true
+**60 fps at 640x480** (the defaults in `config.json` are tuned for it).
+It is *not* a standard webcam though, so Windows needs a one-time driver
+install (this is the only install the whole project needs):
+
+1. Download the installer from the
+   [PS3EyeDirectShow releases](https://github.com/jkevin/PS3EyeDirectShow/releases)
+   (or the [AllanCat fork](https://github.com/AllanCat/PS3EyeDirectShow)
+   with multi-camera and app-compatibility fixes). It installs a generic
+   WinUSB driver plus a DirectShow filter, which makes the PS3 Eye show
+   up as a normal Windows camera.
+2. Plug in the camera, then run `BooruVision.exe` — if another camera is
+   also connected and the wrong one opens, change `camera_index` in
+   `config.json` (0, 1, 2...).
+
+Avoid the old CL-Eye driver — it is unmaintained and breaks on modern
+Windows. The opentrack "open driver" also won't work here: it only feeds
+opentrack, not other camera apps.
+
+Using a **regular webcam** instead: set `capture_width`/`capture_height`
+to `1280`/`720` and `fourcc` to `"MJPG"` in `config.json` so it can reach
+60 fps.
 
 ## Setup from source (for developing)
 

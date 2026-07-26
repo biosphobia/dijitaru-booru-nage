@@ -1,9 +1,12 @@
 name: Build game downloads
 
-# Portable, zero-install builds of everything:
-# - the Godot game for Windows and macOS
-# - the BooruVision camera tool (calibrate/detect) as a single executable
-#   for Windows and macOS - no Python needed on the target PC
+# Portable, zero-install Windows builds of everything:
+# - the Godot game
+# - the BooruVision camera tool (calibrate/detect) as a single executable,
+#   no Python needed on the target PC
+#
+# macOS builds are currently disabled to keep CI focused on Windows; the
+# macOS export preset and the old matrix entries live in git history.
 #
 # Every push to main (and manual runs) refreshes the rolling "latest"
 # pre-release. Pushing a tag like v1.0 creates a versioned release.
@@ -43,28 +46,13 @@ jobs:
           cd build/windows
           zip -r ../DijitaruBooruNage-windows.zip .
 
-      - name: Export macOS build
-        run: |
-          mkdir -p build
-          godot --headless --path godot --export-release "macOS" ../build/DijitaruBooruNage-macos.zip
-
       - uses: actions/upload-artifact@v4
         with:
           name: game-builds
           path: build/*.zip
 
   vision:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            name: windows
-          - os: macos-latest
-            name: macos-applesilicon
-          - os: macos-15-intel
-            name: macos-intel
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -78,25 +66,18 @@ jobs:
           pip install -r requirements.txt pyinstaller
           pyinstaller --onefile --console --name BooruVision app.py
 
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
+      - name: Package
         working-directory: vision/dist
-        run: Compress-Archive -Path BooruVision.exe -DestinationPath "../../BooruVision-${{ matrix.name }}.zip"
-
-      - name: Package (macOS)
-        if: runner.os == 'macOS'
-        working-directory: vision/dist
-        run: zip -r "../../BooruVision-${{ matrix.name }}.zip" BooruVision
+        run: Compress-Archive -Path BooruVision.exe -DestinationPath "../../BooruVision-windows.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: vision-${{ matrix.name }}
+          name: vision-windows
           path: BooruVision-*.zip
 
   release:
     needs: [game, vision]
-    # Run even if one matrix build failed, so the other downloads still ship.
-    if: ${{ !cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') }}
+    if: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -117,18 +98,15 @@ jobs:
           name: Latest build
           prerelease: true
           body: |
-            Automatic build of the newest version. Nothing to install - download, unzip, run.
+            Automatic Windows build of the newest version. Nothing to install - download, unzip, run.
 
-            **Game** (put this on the projector PC):
-            - Windows: `DijitaruBooruNage-windows.zip` - unzip, run the .exe
-            - macOS: `DijitaruBooruNage-macos.zip` - unzip, right-click the app > Open (first launch only)
-
-            **Camera tool** (same PC, needs the webcam):
-            - Windows: `BooruVision-windows.zip` - unzip, double-click `BooruVision.exe`, pick from the menu.
+            - **Game**: `DijitaruBooruNage-windows.zip` - unzip, run the .exe. Press F for fullscreen.
+            - **Camera tool**: `BooruVision-windows.zip` - unzip, double-click `BooruVision.exe`,
+              pick from the menu (1 = calibrate, 2 = detect).
               If Windows SmartScreen complains: "More info" > "Run anyway".
-            - macOS: `BooruVision-macos-applesilicon.zip` (M1/M2/M3/M4) or `BooruVision-macos-intel.zip`
-              (older Intel Macs) - unzip, then first time run `xattr -cr BooruVision` in Terminal,
-              then double-click it.
+
+            Using a PS3 Eye camera? Install the PS3EyeDirectShow driver first -
+            see the README section "Using a PS3 Eye camera".
 
             Config and calibration files are created next to the executable on first run.
           files: downloads/*.zip

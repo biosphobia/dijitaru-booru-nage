@@ -16,11 +16,14 @@ else:
 CONFIG_PATH = os.path.join(HERE, "config.json")
 CALIBRATION_PATH = os.path.join(HERE, "calibration.json")
 
+# Defaults are tuned for the PS3 Eye (640x480 @ 60 fps, raw frames).
+# For a regular webcam, set capture_width/height to 1280/720 and
+# fourcc to "MJPG" so it can reach 60 fps.
 DEFAULT_CONFIG = {
     "camera_index": 0,
-    "fourcc": "MJPG",
-    "capture_width": 1280,
-    "capture_height": 720,
+    "fourcc": "",
+    "capture_width": 640,
+    "capture_height": 480,
     "capture_fps": 60,
     "udp_host": "127.0.0.1",
     "udp_port": 4242,
@@ -113,12 +116,14 @@ def open_camera(config):
             "> Camera)." % index
         )
 
-    # MJPG lets most USB webcams deliver 720p at 60 fps instead of 5-30.
-    fourcc = config.get("fourcc", "MJPG")
+    # Optional pixel-format override. Leave empty for the PS3 Eye (raw
+    # frames); set to "MJPG" for regular webcams so they can reach 60 fps
+    # at 720p instead of 5-30.
+    fourcc = config.get("fourcc", "")
     if fourcc:
         cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
-    cam.set(cv2.CAP_PROP_FRAME_WIDTH, config.get("capture_width", 1280))
-    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, config.get("capture_height", 720))
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, config.get("capture_width", 640))
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, config.get("capture_height", 480))
     cam.set(cv2.CAP_PROP_FPS, config.get("capture_fps", 60))
     return cam
 
