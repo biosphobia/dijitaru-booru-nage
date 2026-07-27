@@ -16,8 +16,8 @@ func _ready() -> void:
 	var ui := CanvasLayer.new()
 	_score_label = Label.new()
 	_score_label.text = "スコア: 0"
-	_score_label.position = Vector2(20, 12)
-	_score_label.add_theme_font_size_override("font_size", 36)
+	_score_label.position = Vector2(24, 14)
+	_score_label.add_theme_font_size_override("font_size", 52)
 	ui.add_child(_score_label)
 	add_child(ui)
 

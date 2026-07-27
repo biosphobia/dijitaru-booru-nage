@@ -16,13 +16,14 @@ Events emitted (JSON, sent to the game's port; all carry "type": "meshy"):
 """
 
 import base64
+import json
 import os
 import threading
 import time
 
 import cv2
 
-from common import HERE
+from common import HERE, update_meshy_config
 from meshy import MeshyClient, MeshyError
 
 PHOTOS_DIR = os.path.join(HERE, "photos")
@@ -59,6 +60,8 @@ class MeshyStudio:
             self._event("photos", count=0)
         elif name == "preview":
             self.preview_on = bool(cmd.get("on", False))
+        elif name == "set_meshy":
+            self._set_meshy(str(cmd.get("value", "")))
         elif name == "generate":
             self._start(self._generate, str(cmd.get("prompt", "")))
         elif name == "list":
@@ -120,6 +123,37 @@ class MeshyStudio:
             f.write(jpeg_bytes)
         print("STUDIO: photo %d/%d %s -> %s" % (len(self.photos), self.MAX_PHOTOS, source, path))
         self._event("photos", count=len(self.photos))
+
+    def _set_meshy(self, text):
+        """Accept either a raw API key or a pasted JSON snippet (the whole
+        "meshy" block, or a config containing one) and persist it."""
+        text = text.strip()
+        if not text:
+            return self._error("Empty Meshy key", "key_invalid")
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+            except ValueError:
+                return self._error("Invalid JSON", "key_invalid")
+            if isinstance(data.get("meshy"), dict):
+                data = data["meshy"]
+            updates = {k: data[k] for k in ("api_key", "ai_model", "rig", "height_meters")
+                       if k in data}
+            if not updates:
+                return self._error("No Meshy fields in that JSON", "key_invalid")
+        else:
+            updates = {"api_key": text}
+
+        self.api_key = updates.get("api_key", self.api_key)
+        self.ai_model = updates.get("ai_model", self.ai_model)
+        self.rig = bool(updates.get("rig", self.rig))
+        self.height_meters = updates.get("height_meters", self.height_meters)
+        try:
+            update_meshy_config(updates)
+        except OSError as e:
+            return self._error("Could not save config: %s" % e, "key_save_failed")
+        print("STUDIO: meshy settings saved (%s)" % ", ".join(sorted(updates)))
+        self._event("key_saved")
 
     def _client(self):
         if not self.api_key:

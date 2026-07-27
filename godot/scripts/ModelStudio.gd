@@ -21,6 +21,8 @@ const ERROR_TEXT := {
 	"capture_failed": "撮影失敗",
 	"photos_full": "写真は4枚まで（クリアしてください）",
 	"file_failed": "ファイル読込失敗",
+	"key_invalid": "APIキーが無効",
+	"key_save_failed": "保存失敗",
 }
 const STAGE_TEXT := {
 	"model": "3Dモデル生成中",
@@ -29,6 +31,7 @@ const STAGE_TEXT := {
 }
 
 var _prompt: LineEdit
+var _api_key: LineEdit
 var _photos_label: Label
 var _status: Label
 var _progress: ProgressBar
@@ -49,20 +52,20 @@ func _ready() -> void:
 
 	# -- left: controls ---------------------------------------------------
 	var panel := VBoxContainer.new()
-	panel.custom_minimum_size = Vector2(430, 0)
-	panel.add_theme_constant_override("separation", 12)
+	panel.custom_minimum_size = Vector2(560, 0)
+	panel.add_theme_constant_override("separation", 14)
 	root.add_child(panel)
 
-	panel.add_child(_label("モデルスタジオ", 34))
+	panel.add_child(_label("モデルスタジオ", 46))
 
 	# live camera viewfinder (frames streamed from the vision tool)
 	_viewfinder = TextureRect.new()
-	_viewfinder.custom_minimum_size = Vector2(410, 230)
+	_viewfinder.custom_minimum_size = Vector2(520, 292)
 	_viewfinder.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_viewfinder.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	panel.add_child(_viewfinder)
 
-	_photos_label = _label("写真 0 / 4", 22)
+	_photos_label = _label("写真 0 / 4", 30)
 	panel.add_child(_photos_label)
 
 	var photo_row := HBoxContainer.new()
@@ -83,8 +86,20 @@ func _ready() -> void:
 	_prompt = LineEdit.new()
 	_prompt.text = DEFAULT_PROMPT
 	_prompt.placeholder_text = "テクスチャプロンプト"
-	_prompt.custom_minimum_size = Vector2(0, 40)
+	_prompt.custom_minimum_size = Vector2(0, 56)
 	panel.add_child(_prompt)
+
+	var key_row := HBoxContainer.new()
+	key_row.add_theme_constant_override("separation", 10)
+	_api_key = LineEdit.new()
+	_api_key.secret = true
+	_api_key.placeholder_text = "Meshy APIキー / JSON"
+	_api_key.custom_minimum_size = Vector2(0, 56)
+	_api_key.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_api_key.text_submitted.connect(func(_t: String) -> void: _on_save_key())
+	key_row.add_child(_api_key)
+	key_row.add_child(_button("保存", _on_save_key))
+	panel.add_child(key_row)
 
 	panel.add_child(_button("3Dモデル生成", _on_generate))
 	panel.add_child(_button("クラウドから読込", _on_load_latest))
@@ -92,10 +107,10 @@ func _ready() -> void:
 	_progress = ProgressBar.new()
 	_progress.min_value = 0
 	_progress.max_value = 100
-	_progress.custom_minimum_size = Vector2(0, 26)
+	_progress.custom_minimum_size = Vector2(0, 34)
 	panel.add_child(_progress)
 
-	_status = _label("待機中", 16)
+	_status = _label("待機中", 22)
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	panel.add_child(_status)
 
@@ -149,8 +164,8 @@ func _label(text: String, size: int) -> Label:
 func _button(text: String, on_pressed: Callable) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(0, 44)
-	button.add_theme_font_size_override("font_size", 19)
+	button.custom_minimum_size = Vector2(0, 60)
+	button.add_theme_font_size_override("font_size", 26)
 	button.pressed.connect(on_pressed)
 	return button
 
@@ -168,6 +183,11 @@ func _on_files_selected(paths: PackedStringArray) -> void:
 
 func _on_clear() -> void:
 	BallInput.send_command({"cmd": "clear"})
+
+func _on_save_key() -> void:
+	if _api_key.text.strip_edges().is_empty():
+		return
+	BallInput.send_command({"cmd": "set_meshy", "value": _api_key.text})
 
 func _on_generate() -> void:
 	_save_prompt()
@@ -187,6 +207,9 @@ func _on_meshy_event(data: Dictionary) -> void:
 			_show_preview_frame(str(data.get("jpg", "")))
 		"photos":
 			_photos_label.text = "写真 %d / 4" % int(data.get("count", 0))
+		"key_saved":
+			_api_key.clear()
+			_status.text = "APIキー保存済み"
 		"status":
 			var stage := str(data.get("stage", ""))
 			var progress := int(data.get("progress", 0))
