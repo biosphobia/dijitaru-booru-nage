@@ -42,6 +42,10 @@ var _http: HTTPRequest
 var _downloading := false
 var _connected := false
 var _last_pong_ms := 0
+## Local camera via Godot's CameraServer (macOS/iOS in Godot 4.3). When
+## unavailable (e.g. Windows), the vision tool streams the preview instead.
+var _local_feed: CameraFeed = null
+var _capture_count := 0
 
 func _ready() -> void:
 	var ui := CanvasLayer.new()
@@ -146,7 +150,8 @@ func _ready() -> void:
 	BallInput.meshy_event.connect(_on_meshy_event)
 	_load_prompt()
 	_load_cached_model()
-	BallInput.send_command({"cmd": "preview", "on": true})
+	if not _try_local_camera():
+		BallInput.send_command({"cmd": "preview", "on": true})
 
 	# heartbeat: detect whether the camera tool is actually running
 	var ping_timer := Timer.new()
@@ -160,8 +165,24 @@ func _process(delta: float) -> void:
 	_holder.rotate_y(0.6 * delta)
 
 func _exit_tree() -> void:
-	BallInput.send_command({"cmd": "preview", "on": false})
+	if _local_feed != null:
+		_local_feed.feed_is_active = false
+	else:
+		BallInput.send_command({"cmd": "preview", "on": false})
 	_save_prompt()
+
+## Use the machine's camera directly through Godot where supported.
+func _try_local_camera() -> bool:
+	var feeds := CameraServer.feeds()
+	if feeds.is_empty():
+		return false
+	_local_feed = feeds[0]
+	_local_feed.feed_is_active = true
+	var tex := CameraTexture.new()
+	tex.camera_feed_id = _local_feed.get_id()
+	tex.camera_is_active = true
+	_viewfinder.texture = tex
+	return true
 
 # -- UI helpers -----------------------------------------------------------
 
@@ -182,7 +203,35 @@ func _button(text: String, on_pressed: Callable) -> Button:
 # -- commands to the vision tool ------------------------------------------
 
 func _on_capture() -> void:
-	BallInput.send_command({"cmd": "capture"})
+	if _local_feed != null:
+		_capture_local()
+	else:
+		BallInput.send_command({"cmd": "capture"})
+
+## Grab a frame from the local camera, save it, and hand the file to the
+## vision tool so it joins the Meshy photo set.
+func _capture_local() -> void:
+	var img: Image = null
+	if _viewfinder.texture != null:
+		img = _viewfinder.texture.get_image()
+	if img == null or img.is_empty():
+		# fallback: crop the on-screen viewfinder out of a window screenshot
+		var shot := get_viewport().get_texture().get_image()
+		if shot != null:
+			img = shot.get_region(Rect2i(_viewfinder.get_global_rect()))
+	if img == null or img.is_empty():
+		_status.text = "撮影失敗"
+		return
+	if img.get_width() > 1280:
+		img.resize(1280, int(img.get_height() * 1280.0 / img.get_width()),
+			Image.INTERPOLATE_LANCZOS)
+	img.convert(Image.FORMAT_RGB8)
+	_capture_count += 1
+	var path := "user://camera_%d.jpg" % _capture_count
+	if img.save_jpg(path, 0.92) != OK:
+		_status.text = "撮影失敗"
+		return
+	BallInput.send_command({"cmd": "add_file", "path": ProjectSettings.globalize_path(path)})
 
 func _on_add_file() -> void:
 	_file_dialog.popup_centered_ratio(0.7)
@@ -226,9 +275,11 @@ func _on_meshy_event(data: Dictionary) -> void:
 				_connected = true
 				_status.text = "待機中"
 				# the tool may have started after this screen opened
-				BallInput.send_command({"cmd": "preview", "on": true})
+				if _local_feed == null:
+					BallInput.send_command({"cmd": "preview", "on": true})
 		"frame":
-			_show_preview_frame(str(data.get("jpg", "")))
+			if _local_feed == null:
+				_show_preview_frame(str(data.get("jpg", "")))
 		"photos":
 			_photos_label.text = "写真 %d / 4" % int(data.get("count", 0))
 		"key_saved":
