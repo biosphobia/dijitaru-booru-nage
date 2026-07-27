@@ -108,6 +108,8 @@ def main():
     studio = MeshyStudio(
         config, lambda event: sock.sendto(json.dumps(event).encode("utf-8"), udp_addr)
     )
+    # reported to the game via pong events so it can show tracking state
+    studio.calibrated = homography is not None
 
     det = config.get("detection", {})
     proc_width = det.get("processing_width", 640)

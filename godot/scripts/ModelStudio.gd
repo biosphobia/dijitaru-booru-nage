@@ -40,8 +40,6 @@ var _file_dialog: FileDialog
 var _holder: Node3D
 var _http: HTTPRequest
 var _downloading := false
-var _connected := false
-var _last_pong_ms := 0
 ## Local camera via Godot's CameraServer: built-in backend on macOS/iOS,
 ## CameraServerExtension (bundled in exports) on Windows/Linux. If no feed
 ## ever appears, the vision tool streams the preview as a fallback.
@@ -156,13 +154,8 @@ func _ready() -> void:
 	if not _try_local_camera():
 		BallInput.send_command({"cmd": "preview", "on": true})
 
-	# heartbeat: detect whether the camera tool is actually running
-	var ping_timer := Timer.new()
-	ping_timer.wait_time = 1.5
-	ping_timer.timeout.connect(_on_ping_tick)
-	add_child(ping_timer)
-	ping_timer.start()
-	_on_ping_tick()
+	BallInput.link_changed.connect(_on_link_changed)
+	_on_link_changed()
 
 func _process(delta: float) -> void:
 	_holder.rotate_y(0.6 * delta)
@@ -264,12 +257,15 @@ func _on_files_selected(paths: PackedStringArray) -> void:
 func _on_clear() -> void:
 	BallInput.send_command({"cmd": "clear"})
 
-func _on_ping_tick() -> void:
-	BallInput.send_command({"cmd": "ping"})
-	if _connected and Time.get_ticks_msec() - _last_pong_ms > 5000:
-		_connected = false
-	if not _connected:
+func _on_link_changed() -> void:
+	if not BallInput.connected:
 		_status.text = "カメラツール未接続"
+	else:
+		if _status.text == "カメラツール未接続":
+			_status.text = "待機中"
+		# the tool may have started after this screen opened
+		if _local_feed == null:
+			BallInput.send_command({"cmd": "preview", "on": true})
 
 func _on_save_key() -> void:
 	if _api_key.text.strip_edges().is_empty():
@@ -290,14 +286,6 @@ func _on_load_latest() -> void:
 
 func _on_meshy_event(data: Dictionary) -> void:
 	match str(data.get("event", "")):
-		"pong":
-			_last_pong_ms = Time.get_ticks_msec()
-			if not _connected:
-				_connected = true
-				_status.text = "待機中"
-				# the tool may have started after this screen opened
-				if _local_feed == null:
-					BallInput.send_command({"cmd": "preview", "on": true})
 		"frame":
 			if _local_feed == null:
 				_show_preview_frame(str(data.get("jpg", "")))

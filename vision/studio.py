@@ -52,7 +52,7 @@ class MeshyStudio:
     def handle(self, cmd, frame):
         name = cmd.get("cmd", "")
         if name == "ping":
-            self._event("pong")
+            self._event("pong", calibrated=bool(getattr(self, "calibrated", False)))
         elif name == "capture":
             self._capture(frame)
         elif name == "add_file":

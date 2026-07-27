@@ -27,6 +27,7 @@ const MARK_COLORS := {
 var _menu: CanvasLayer
 var _mode: Node = null
 var _calibration: CanvasLayer
+var _link_label: Label
 
 func _ready() -> void:
 	var bg := ColorRect.new()
@@ -67,6 +68,38 @@ func _ready() -> void:
 	_calibration.visible = false
 	add_child(_calibration)
 
+	# Hit marks come straight from the vision tool's events, independent of
+	# the synthesized-click path, so the indicator works even if a click is
+	# consumed or the input pipeline misbehaves.
+	BallInput.ball_hit.connect(_on_ball_hit)
+
+	# Persistent tracking-state indicator (tool missing / not calibrated).
+	var link_layer := CanvasLayer.new()
+	link_layer.layer = 5
+	_link_label = Label.new()
+	_link_label.add_theme_font_size_override("font_size", 24)
+	_link_label.modulate = Color(1.0, 0.85, 0.4, 0.9)
+	_link_label.set_anchors_and_offsets_preset(
+		Control.PRESET_BOTTOM_RIGHT, Control.PRESET_MODE_MINSIZE, 20)
+	_link_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_link_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	link_layer.add_child(_link_label)
+	add_child(link_layer)
+	BallInput.link_changed.connect(_update_link)
+	_update_link()
+
+func _on_ball_hit(pos: Vector2, color: String, radius_px: float) -> void:
+	if not _calibration.visible:
+		_show_hit_mark(pos, MARK_COLORS.get(color, Color.WHITE), radius_px)
+
+func _update_link() -> void:
+	if not BallInput.connected:
+		_link_label.text = "カメラツール未接続"
+	elif not BallInput.calibrated:
+		_link_label.text = "未キャリブレーション"
+	else:
+		_link_label.text = ""
+
 func _menu_button(text: String, on_pressed: Callable) -> Button:
 	var button := Button.new()
 	button.text = text
@@ -89,11 +122,12 @@ func _back_to_menu() -> void:
 	_menu.visible = true
 
 func _unhandled_input(event: InputEvent) -> void:
+	# ball hits draw their mark via the ball_hit signal; this only covers
+	# real mouse clicks (no ball metadata)
 	if event is InputEventMouseButton and event.pressed \
-			and event.button_index == MOUSE_BUTTON_LEFT and not _calibration.visible:
-		var color_name := str(event.get_meta("ball_color", ""))
-		var radius := float(event.get_meta("ball_radius_px", 14.0))
-		_show_hit_mark(event.position, MARK_COLORS.get(color_name, Color.WHITE), radius)
+			and event.button_index == MOUSE_BUTTON_LEFT and not _calibration.visible \
+			and not event.has_meta("ball_color"):
+		_show_hit_mark(event.position, Color.WHITE, 14.0)
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_C:

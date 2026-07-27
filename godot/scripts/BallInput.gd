@@ -10,14 +10,22 @@ signal ball_hit(position: Vector2, color: String, radius_px: float)
 ## Model Studio events from the vision tool (photo counts, Meshy progress,
 ## finished models). See vision/studio.py for the event dictionary shapes.
 signal meshy_event(data: Dictionary)
+## Emitted when `connected` or `calibrated` changes.
+signal link_changed
 
 const PORT := 4242
 const CMD_PORT := 4243
 ## Fallback mark radius (fraction of screen width) when a packet has no "r".
 const DEFAULT_RADIUS_FRAC := 0.012
 
+## Whether the vision tool is running (answers pings) and whether it has a
+## wall calibration (without one, ball hits are disabled tool-side).
+var connected := false
+var calibrated := false
+
 var _socket := PacketPeerUDP.new()
 var _cmd_socket := PacketPeerUDP.new()
+var _last_pong_ms := 0
 
 func _ready() -> void:
 	var err := _socket.bind(PORT, "127.0.0.1")
@@ -27,9 +35,30 @@ func _ready() -> void:
 		print("BallInput: listening for hits on udp://127.0.0.1:%d" % PORT)
 	_cmd_socket.connect_to_host("127.0.0.1", CMD_PORT)
 
+	var ping_timer := Timer.new()
+	ping_timer.wait_time = 1.5
+	ping_timer.timeout.connect(_ping)
+	add_child(ping_timer)
+	ping_timer.start()
+	_ping()
+
 ## Send a Model Studio command to the vision tool (capture/clear/generate/list).
 func send_command(cmd: Dictionary) -> void:
 	_cmd_socket.put_packet(JSON.stringify(cmd).to_utf8_buffer())
+
+func _ping() -> void:
+	send_command({"cmd": "ping"})
+	if connected and Time.get_ticks_msec() - _last_pong_ms > 5000:
+		connected = false
+		link_changed.emit()
+
+func _on_pong(data: Dictionary) -> void:
+	_last_pong_ms = Time.get_ticks_msec()
+	var cal := bool(data.get("calibrated", false))
+	if not connected or cal != calibrated:
+		connected = true
+		calibrated = cal
+		link_changed.emit()
 
 func _process(_delta: float) -> void:
 	while _socket.get_available_packet_count() > 0:
@@ -38,6 +67,8 @@ func _process(_delta: float) -> void:
 		if typeof(data) != TYPE_DICTIONARY:
 			continue
 		if data.get("type", "") == "meshy":
+			if data.get("event", "") == "pong":
+				_on_pong(data)
 			meshy_event.emit(data)
 			continue
 		if data.get("type", "") != "hit":
