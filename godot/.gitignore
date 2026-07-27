@@ -1,2 +1,5 @@
 .godot/
 *.tmp
+# CameraServerExtension is fetched by CI (and installed manually for local
+# Windows/Linux editor use) - not vendored
+addons/

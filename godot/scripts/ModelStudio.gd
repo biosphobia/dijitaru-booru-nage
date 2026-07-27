@@ -42,9 +42,12 @@ var _http: HTTPRequest
 var _downloading := false
 var _connected := false
 var _last_pong_ms := 0
-## Local camera via Godot's CameraServer (macOS/iOS in Godot 4.3). When
-## unavailable (e.g. Windows), the vision tool streams the preview instead.
-var _local_feed: CameraFeed = null
+## Local camera via Godot's CameraServer: built-in backend on macOS/iOS,
+## CameraServerExtension (bundled in exports) on Windows/Linux. If no feed
+## ever appears, the vision tool streams the preview as a fallback.
+## Untyped on purpose: CameraFeedExtension must not be upcast to CameraFeed.
+var _local_feed = null
+var _camera_ext: Object = null
 var _capture_count := 0
 
 func _ready() -> void:
@@ -171,8 +174,21 @@ func _exit_tree() -> void:
 		BallInput.send_command({"cmd": "preview", "on": false})
 	_save_prompt()
 
-## Use the machine's camera directly through Godot where supported.
+## Use the machine's camera directly through Godot. Feeds can appear
+## asynchronously (permission prompts, extension enumeration), so if none
+## exists yet we watch for additions and switch over when one arrives.
 func _try_local_camera() -> bool:
+	CameraServer.monitoring_feeds = true
+	if ClassDB.class_exists("CameraServerExtension"):
+		_camera_ext = ClassDB.instantiate("CameraServerExtension")
+		if _camera_ext != null and _camera_ext.has_method("request_permission"):
+			_camera_ext.request_permission()
+	if _activate_first_feed():
+		return true
+	CameraServer.camera_feed_added.connect(_on_feed_added)
+	return false
+
+func _activate_first_feed() -> bool:
 	var feeds := CameraServer.feeds()
 	if feeds.is_empty():
 		return false
@@ -183,6 +199,11 @@ func _try_local_camera() -> bool:
 	tex.camera_is_active = true
 	_viewfinder.texture = tex
 	return true
+
+func _on_feed_added(_id: int) -> void:
+	if _local_feed == null and _activate_first_feed():
+		# local camera took over - stop the tool's preview stream
+		BallInput.send_command({"cmd": "preview", "on": false})
 
 # -- UI helpers -----------------------------------------------------------
 

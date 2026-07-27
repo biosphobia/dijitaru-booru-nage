@@ -24,7 +24,7 @@ webcam -> vision/detect.py -> UDP {"type":"hit","x":0.42,"y":0.61,"color":"red"}
 
 ## Parts
 
-- `godot/` — Godot 4.3 project: the test game (a white ball appears at a
+- `godot/` — Godot 4.5 project: the test game (a white ball appears at a
   random point on a blue background; a hit pops it and a new one appears),
   the calibration pattern screen, and the `BallInput.gd` autoload that
   receives hits.
@@ -83,7 +83,12 @@ to `1280`/`720` and `fourcc` to `"MJPG"` in `config.json` so it can reach
 
 ## Setup from source (for developing)
 
-1. Install [Godot 4.3+](https://godotengine.org) and Python 3.9+.
+1. Install [Godot 4.5+](https://godotengine.org) and Python 3.9+.
+   The Model Studio viewfinder uses the machine's camera directly through
+   Godot: built-in on macOS; on Windows/Linux the release builds bundle
+   [CameraServerExtension](https://github.com/j20001970/godot-cameraserver-extension)
+   (for editor runs on those platforms, drop its `addons/` folder into
+   `godot/` — it is fetched by CI and not committed).
 2. `pip install -r vision/requirements.txt`
 3. Open `godot/project.godot` in Godot and run it (F5). The Python
    entry points are `vision/calibrate.py` and `vision/detect.py` (or

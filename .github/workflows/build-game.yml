@@ -15,7 +15,8 @@ on:
   workflow_dispatch:
 
 env:
-  GODOT_VERSION: "4.3"
+  GODOT_VERSION: "4.5"
+  CSEXT_VERSION: "2025.08.21"
 
 jobs:
   game:
@@ -32,6 +33,21 @@ jobs:
           mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
           unzip -q templates.tpz -d /tmp/templates
           mv /tmp/templates/templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
+      # Gives the exported game direct webcam access on Windows/Linux
+      # (macOS uses Godot's built-in camera backend).
+      - name: Add CameraServerExtension
+        run: |
+          curl -sSL -o csext.zip "https://github.com/j20001970/godot-cameraserver-extension/releases/download/${CSEXT_VERSION}/CameraServerExtension-${CSEXT_VERSION}.zip"
+          mkdir -p /tmp/csext
+          unzip -q csext.zip -d /tmp/csext
+          if [ -d /tmp/csext/addons ]; then
+            mv /tmp/csext/addons godot/
+          else
+            mkdir -p godot/addons
+            mv /tmp/csext/* godot/addons/
+          fi
+          find godot/addons -maxdepth 3 | head -30
 
       - name: Import project resources
         run: godot --headless --path godot --import || true
