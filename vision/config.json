@@ -6,7 +6,14 @@
   "capture_fps": 60,
   "udp_host": "127.0.0.1",
   "udp_port": 4242,
+  "udp_cmd_port": 4243,
   "preview": true,
+  "meshy": {
+    "api_key": "",
+    "ai_model": "latest",
+    "rig": true,
+    "height_meters": 1.7
+  },
   "detection": {
     "mode": "reversal",
     "processing_width": 640,

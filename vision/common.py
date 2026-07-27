@@ -26,7 +26,14 @@ DEFAULT_CONFIG = {
     "capture_fps": 60,
     "udp_host": "127.0.0.1",
     "udp_port": 4242,
+    "udp_cmd_port": 4243,
     "preview": True,
+    "meshy": {
+        "api_key": "",
+        "ai_model": "latest",
+        "rig": True,
+        "height_meters": 1.7,
+    },
     "detection": {
         "mode": "reversal",
         "processing_width": 640,

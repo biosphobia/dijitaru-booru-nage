@@ -27,6 +27,7 @@ from common import (
     camera_to_game,
     game_area_polygon_px,
 )
+from studio import MeshyStudio
 
 
 class Track:
@@ -92,6 +93,14 @@ def main():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_addr = (config.get("udp_host", "127.0.0.1"), config.get("udp_port", 4242))
 
+    # command channel: the game sends Model Studio commands here
+    cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    cmd_sock.bind(("127.0.0.1", config.get("udp_cmd_port", 4243)))
+    cmd_sock.setblocking(False)
+    studio = MeshyStudio(
+        config, lambda event: sock.sendto(json.dumps(event).encode("utf-8"), udp_addr)
+    )
+
     det = config.get("detection", {})
     proc_width = det.get("processing_width", 640)
     min_area = det.get("min_area", 30)
@@ -127,6 +136,19 @@ def main():
         if not ok:
             raise SystemExit("Camera stopped delivering frames.")
         frame_idx += 1
+
+        # Model Studio commands from the game (photo capture, generation...)
+        while True:
+            try:
+                raw, _ = cmd_sock.recvfrom(4096)
+            except (BlockingIOError, InterruptedError):
+                break
+            try:
+                cmd = json.loads(raw.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(cmd, dict):
+                studio.handle(cmd, frame)
 
         h, w = frame.shape[:2]
         scale = proc_width / float(w)

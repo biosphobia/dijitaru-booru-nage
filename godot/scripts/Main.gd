@@ -1,7 +1,7 @@
 extends Node2D
-## Minimal test game: a white ball appears at a random point on a solid blue
-## background. A click (mouse, or a real ping pong ball hit routed through
-## BallInput) pops it and a new one appears somewhere else.
+## Main menu / mode manager. Two modes:
+##   Ball Game    - the ball popup test game (BallGame.gd)
+##   Model Studio - photo capture -> Meshy 3D model (ModelStudio.gd)
 ##
 ## Every hit leaves a fading mark at the detected position: colored like the
 ## thrown ball (light blue / orange) and sized like its projected image, so
@@ -9,26 +9,24 @@ extends Node2D
 ## clicks leave a small white mark.
 ##
 ## Keys:
+##   1 / 2  - pick a mode from the menu
+##   Escape - back to menu (from a mode), quit (from the menu)
 ##   C      - toggle the calibration pattern
 ##   F      - toggle fullscreen
-##   Escape - quit
 
-const BallScene := preload("res://scripts/Ball.gd")
+const BallGameScene := preload("res://scripts/BallGame.gd")
+const ModelStudioScene := preload("res://scripts/ModelStudio.gd")
 const CalibrationScene := preload("res://scripts/CalibrationScreen.gd")
 
 const BACKGROUND := Color(0.07, 0.32, 0.85)
-const RESPAWN_DELAY := 0.6
 const MARK_COLORS := {
 	"lightblue": Color(0.45, 0.85, 1.0),
 	"orange": Color(1.0, 0.55, 0.15),
 }
 
-var score := 0
-
-var _score_label: Label
+var _menu: CanvasLayer
+var _mode: Node = null
 var _calibration: CanvasLayer
-var _ball: Area2D = null
-var _respawn_left := 0.0
 
 func _ready() -> void:
 	var bg := ColorRect.new()
@@ -39,30 +37,56 @@ func _ready() -> void:
 	bg_layer.add_child(bg)
 	add_child(bg_layer)
 
-	var ui := CanvasLayer.new()
-	_score_label = Label.new()
-	_score_label.text = "Score: 0"
-	_score_label.position = Vector2(20, 12)
-	_score_label.add_theme_font_size_override("font_size", 36)
-	ui.add_child(_score_label)
+	_menu = CanvasLayer.new()
+	var box := VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_CENTER)
+	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	box.grow_vertical = Control.GROW_DIRECTION_BOTH
+	box.add_theme_constant_override("separation", 18)
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_menu.add_child(box)
+
+	var title := Label.new()
+	title.text = "Dijitaru Booru Nage"
+	title.add_theme_font_size_override("font_size", 52)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(title)
+
+	box.add_child(_menu_button("Ball Game  (1)", func() -> void: _start_mode(BallGameScene)))
+	box.add_child(_menu_button("Model Studio  (2)", func() -> void: _start_mode(ModelStudioScene)))
+
 	var hint := Label.new()
-	hint.text = "C = calibration   F = fullscreen"
+	hint.text = "C = calibration    F = fullscreen    Esc = back / quit"
 	hint.add_theme_font_size_override("font_size", 18)
-	hint.modulate = Color(1, 1, 1, 0.5)
-	hint.position = Vector2(20, get_viewport_rect().size.y - 40)
-	ui.add_child(hint)
-	add_child(ui)
+	hint.modulate = Color(1, 1, 1, 0.6)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(hint)
+	add_child(_menu)
 
 	_calibration = CalibrationScene.new()
 	_calibration.visible = false
 	add_child(_calibration)
 
-func _process(delta: float) -> void:
-	if _calibration.visible or is_instance_valid(_ball):
+func _menu_button(text: String, on_pressed: Callable) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(340, 64)
+	button.add_theme_font_size_override("font_size", 28)
+	button.pressed.connect(on_pressed)
+	return button
+
+func _start_mode(scene: GDScript) -> void:
+	if _mode != null:
 		return
-	_respawn_left -= delta
-	if _respawn_left <= 0.0:
-		_spawn_ball()
+	_menu.visible = false
+	_mode = scene.new()
+	add_child(_mode)
+
+func _back_to_menu() -> void:
+	if _mode != null:
+		_mode.queue_free()
+		_mode = null
+	_menu.visible = true
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed \
@@ -74,27 +98,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_C:
 				_calibration.visible = not _calibration.visible
+				if _mode != null:
+					_mode.set_process(not _calibration.visible)
 			KEY_F:
 				_toggle_fullscreen()
+			KEY_1:
+				if _menu.visible:
+					_start_mode(BallGameScene)
+			KEY_2:
+				if _menu.visible:
+					_start_mode(ModelStudioScene)
 			KEY_ESCAPE:
-				get_tree().quit()
-
-func _spawn_ball() -> void:
-	var ball := BallScene.new()
-	var vp := get_viewport_rect().size
-	var margin := BallScene.RADIUS + 40.0
-	ball.position = Vector2(
-		randf_range(margin, vp.x - margin),
-		randf_range(margin + 60.0, vp.y - margin)
-	)
-	ball.popped.connect(_on_ball_popped)
-	add_child(ball)
-	_ball = ball
-
-func _on_ball_popped() -> void:
-	score += 1
-	_score_label.text = "Score: %d" % score
-	_respawn_left = RESPAWN_DELAY
+				if _calibration.visible:
+					_calibration.visible = false
+				elif _mode != null:
+					_back_to_menu()
+				else:
+					get_tree().quit()
 
 ## Fading mark wherever a hit landed - colored and sized like the thrown
 ## ball so tracking accuracy can be checked against the real impact spot.

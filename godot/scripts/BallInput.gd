@@ -7,12 +7,17 @@ extends Node
 ## x/y are normalized game coordinates in [0, 1] (0,0 = top-left).
 
 signal ball_hit(position: Vector2, color: String, radius_px: float)
+## Model Studio events from the vision tool (photo counts, Meshy progress,
+## finished models). See vision/studio.py for the event dictionary shapes.
+signal meshy_event(data: Dictionary)
 
 const PORT := 4242
+const CMD_PORT := 4243
 ## Fallback mark radius (fraction of screen width) when a packet has no "r".
 const DEFAULT_RADIUS_FRAC := 0.012
 
 var _socket := PacketPeerUDP.new()
+var _cmd_socket := PacketPeerUDP.new()
 
 func _ready() -> void:
 	var err := _socket.bind(PORT, "127.0.0.1")
@@ -20,12 +25,22 @@ func _ready() -> void:
 		push_error("BallInput: could not bind UDP port %d (error %d)" % [PORT, err])
 	else:
 		print("BallInput: listening for hits on udp://127.0.0.1:%d" % PORT)
+	_cmd_socket.connect_to_host("127.0.0.1", CMD_PORT)
+
+## Send a Model Studio command to the vision tool (capture/clear/generate/list).
+func send_command(cmd: Dictionary) -> void:
+	_cmd_socket.put_packet(JSON.stringify(cmd).to_utf8_buffer())
 
 func _process(_delta: float) -> void:
 	while _socket.get_available_packet_count() > 0:
 		var text := _socket.get_packet().get_string_from_utf8()
 		var data: Variant = JSON.parse_string(text)
-		if typeof(data) != TYPE_DICTIONARY or data.get("type", "") != "hit":
+		if typeof(data) != TYPE_DICTIONARY:
+			continue
+		if data.get("type", "") == "meshy":
+			meshy_event.emit(data)
+			continue
+		if data.get("type", "") != "hit":
 			continue
 		var vp := get_viewport().get_visible_rect().size
 		var norm := Vector2(

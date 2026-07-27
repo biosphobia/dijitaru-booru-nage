@@ -2,6 +2,15 @@
 
 Throw ping pong balls at a wall, hit targets in a projected Godot game.
 
+The game opens on a menu with two modes:
+
+- **Ball Game** — the ball popup test game (throw a ball, pop the target).
+- **Model Studio** — photograph a person from up to 4 angles with the
+  tracking camera and turn them into a **rigged 3D model** via
+  [Meshy.ai](https://www.meshy.ai), with live progress and a rotating 3D
+  preview in-game. Models are stored in your Meshy cloud account, so they
+  survive the game being closed; the newest one is also cached locally.
+
 A webcam watches the projected image. A Python script detects ball impacts
 (a fast round blob whose direction suddenly reverses = a bounce off the
 wall), converts the impact point to game coordinates with a homography, and
@@ -119,6 +128,35 @@ No camera handy? Test the game side alone:
 ```
 python vision/test_hit.py 0.5 0.5 orange
 ```
+
+## Model Studio (Meshy.ai)
+
+One-time setup: get an API key from
+[Meshy API settings](https://www.meshy.ai/settings/api) and put it in
+`config.json` next to the camera tool:
+
+```json
+"meshy": { "api_key": "msy-...", "ai_model": "latest", "rig": true, "height_meters": 1.7 }
+```
+
+Then, with the camera tool running (`detect`), pick **Model Studio** in
+the game menu:
+
+1. Stand in front of the camera and click **Take photo** for 1–4 angles
+   (front / side / back work best). Photos are also saved to `photos/`
+   next to the tool so you can check them.
+2. Edit the **texture prompt** to steer how the model looks (saved
+   between sessions).
+3. Click **Generate 3D model** — the progress bar tracks Meshy in real
+   time (model build, then automatic rigging; rigging needs a clear
+   humanoid pose and falls back to the unrigged model if it fails).
+4. The finished model appears rotating in the 3D view. It lives in your
+   Meshy account (**Load newest from Meshy cloud** re-fetches it any
+   time) and is cached locally so it reappears after a restart.
+
+Costs credits per generation on your Meshy account. The whole Meshy
+conversation runs through the camera tool, so the game itself never
+needs the API key.
 
 ## Tuning (`vision/config.json`)
 
