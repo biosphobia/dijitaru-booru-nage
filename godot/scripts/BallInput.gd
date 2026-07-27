@@ -6,9 +6,11 @@ extends Node
 ##   {"type": "hit", "x": 0.42, "y": 0.61, "color": "orange"}
 ## x/y are normalized game coordinates in [0, 1] (0,0 = top-left).
 
-signal ball_hit(position: Vector2, color: String)
+signal ball_hit(position: Vector2, color: String, radius_px: float)
 
 const PORT := 4242
+## Fallback mark radius (fraction of screen width) when a packet has no "r".
+const DEFAULT_RADIUS_FRAC := 0.012
 
 var _socket := PacketPeerUDP.new()
 
@@ -25,22 +27,32 @@ func _process(_delta: float) -> void:
 		var data: Variant = JSON.parse_string(text)
 		if typeof(data) != TYPE_DICTIONARY or data.get("type", "") != "hit":
 			continue
+		var vp := get_viewport().get_visible_rect().size
 		var norm := Vector2(
 			clampf(float(data.get("x", 0.5)), 0.0, 1.0),
 			clampf(float(data.get("y", 0.5)), 0.0, 1.0)
 		)
-		var pos := norm * get_viewport().get_visible_rect().size
-		ball_hit.emit(pos, str(data.get("color", "unknown")))
-		_send_click(pos)
+		var pos := norm * vp
+		var r_frac := clampf(float(data.get("r", 0.0)), 0.0, 0.2)
+		if r_frac <= 0.0:
+			r_frac = DEFAULT_RADIUS_FRAC
+		var radius_px := r_frac * vp.x
+		var color := str(data.get("color", "unknown"))
+		ball_hit.emit(pos, color, radius_px)
+		_send_click(pos, color, radius_px)
 
 ## Synthesize a left-click press+release so anything that reacts to normal
 ## mouse clicks (buttons, Area2D input_event, _unhandled_input) just works.
-func _send_click(pos: Vector2) -> void:
+## Ball info rides along as event metadata so the game can draw the hit
+## mark in the ball's color and at its real projected size.
+func _send_click(pos: Vector2, color: String, radius_px: float) -> void:
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.pressed = true
 	press.position = pos
 	press.global_position = pos
+	press.set_meta("ball_color", color)
+	press.set_meta("ball_radius_px", radius_px)
 	Input.parse_input_event(press)
 
 	var release := InputEventMouseButton.new()

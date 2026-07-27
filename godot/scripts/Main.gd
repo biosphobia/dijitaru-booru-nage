@@ -3,8 +3,10 @@ extends Node2D
 ## background. A click (mouse, or a real ping pong ball hit routed through
 ## BallInput) pops it and a new one appears somewhere else.
 ##
-## Every click also shows a small ripple at the cursor position, so you can
-## see exactly where a thrown ball registered - even when it misses.
+## Every hit leaves a fading mark at the detected position: colored like the
+## thrown ball (light blue / orange) and sized like its projected image, so
+## you can check tracking accuracy against the real impact spot. Plain mouse
+## clicks leave a small white mark.
 ##
 ## Keys:
 ##   C      - toggle the calibration pattern
@@ -16,6 +18,10 @@ const CalibrationScene := preload("res://scripts/CalibrationScreen.gd")
 
 const BACKGROUND := Color(0.07, 0.32, 0.85)
 const RESPAWN_DELAY := 0.6
+const MARK_COLORS := {
+	"lightblue": Color(0.45, 0.85, 1.0),
+	"orange": Color(1.0, 0.55, 0.15),
+}
 
 var score := 0
 
@@ -61,7 +67,9 @@ func _process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed \
 			and event.button_index == MOUSE_BUTTON_LEFT and not _calibration.visible:
-		_show_ripple(event.position)
+		var color_name := str(event.get_meta("ball_color", ""))
+		var radius := float(event.get_meta("ball_radius_px", 14.0))
+		_show_hit_mark(event.position, MARK_COLORS.get(color_name, Color.WHITE), radius)
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_C:
@@ -88,11 +96,14 @@ func _on_ball_popped() -> void:
 	_score_label.text = "Score: %d" % score
 	_respawn_left = RESPAWN_DELAY
 
-## Small expanding-ring effect wherever a click landed.
-func _show_ripple(pos: Vector2) -> void:
-	var ripple := Ripple.new()
-	ripple.position = pos
-	add_child(ripple)
+## Fading mark wherever a hit landed - colored and sized like the thrown
+## ball so tracking accuracy can be checked against the real impact spot.
+func _show_hit_mark(pos: Vector2, color: Color, radius: float) -> void:
+	var mark := HitMark.new()
+	mark.position = pos
+	mark.color = color
+	mark.radius = clampf(radius, 6.0, 200.0)
+	add_child(mark)
 
 func _toggle_fullscreen() -> void:
 	var window := get_window()
@@ -101,8 +112,10 @@ func _toggle_fullscreen() -> void:
 	else:
 		window.mode = Window.MODE_FULLSCREEN
 
-class Ripple extends Node2D:
-	const LIFETIME := 0.4
+class HitMark extends Node2D:
+	const LIFETIME := 1.4
+	var color := Color.WHITE
+	var radius := 14.0
 	var _age := 0.0
 
 	func _process(delta: float) -> void:
@@ -112,6 +125,7 @@ class Ripple extends Node2D:
 		queue_redraw()
 
 	func _draw() -> void:
-		var t := _age / LIFETIME
-		draw_arc(Vector2.ZERO, 14.0 + 55.0 * t, 0.0, TAU, 40,
-			Color(1.0, 1.0, 1.0, 0.9 * (1.0 - t)), 5.0)
+		var fade := 1.0 - _age / LIFETIME
+		draw_circle(Vector2.ZERO, radius, Color(color.r, color.g, color.b, 0.7 * fade))
+		draw_arc(Vector2.ZERO, radius, 0.0, TAU, 40,
+			Color(color.r, color.g, color.b, fade), 2.5)

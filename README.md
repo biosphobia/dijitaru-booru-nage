@@ -35,19 +35,24 @@ to be installed on the PC, not even Python: download, unzip, run.
   `BooruVision.exe`, pick from the menu (1 = calibrate, 2 = detect). If
   SmartScreen complains: "More info" > "Run anyway".
 
+macOS versions of both downloads are also on the Releases page — unzip,
+then **right-click > Open** the app the first time (they are unsigned; for
+the camera tool run `xattr -cr BooruVision` in Terminal once instead).
+
 `config.json` (tuning) and `calibration.json` are created **next to the
 executable** on first run, so the whole thing lives in one folder — a USB
 stick works fine.
 
-Builds are currently Windows-only (macOS is on hold; the export presets
-are still in the repo).
+Defaults are for a **regular webcam** (720p, MJPG, 60 fps requested) —
+including Mac built-in cameras.
 
-## Using a PS3 Eye camera (recommended)
+## Using a PS3 Eye camera (Windows)
 
 The PS3 Eye is a great tracking camera — cheap and it does a true
-**60 fps at 640x480** (the defaults in `config.json` are tuned for it).
-It is *not* a standard webcam though, so Windows needs a one-time driver
-install (this is the only install the whole project needs):
+**60 fps at 640x480**. To use one, set `capture_width` to `640`,
+`capture_height` to `480` and `fourcc` to `""` in `config.json`. It is
+*not* a standard webcam though, so Windows needs a one-time driver
+install (the only install the whole project needs):
 
 1. Download the installer from the
    [PS3EyeDirectShow releases](https://github.com/jkevin/PS3EyeDirectShow/releases)
@@ -100,14 +105,19 @@ to `1280`/`720` and `fourcc` to `"MJPG"` in `config.json` so it can reach
 python vision/detect.py
 ```
 
-Throw a ball at the wall. Each detected impact prints `HIT {...}` in the
-terminal and clicks the game at that spot: a small ripple shows where the
-hit landed, and if it hit the ball, the ball pops and a new one appears.
+Throw a ball at the wall. A hit only registers on **contact** — the
+tracker watches for the ball's trajectory to break sharply (the bounce);
+a ball merely flying across the projection does nothing. Each impact
+prints `HIT {...}` in the terminal and clicks the game at that spot: a
+mark in the ball's color (light blue / orange) and at the ball's real
+projected size appears there and fades out, so you can compare it
+against where the ball actually struck. If it hit the white game ball,
+that pops and a new one appears.
 
 No camera handy? Test the game side alone:
 
 ```
-python vision/test_hit.py 0.5 0.5 red
+python vision/test_hit.py 0.5 0.5 orange
 ```
 
 ## Tuning (`vision/config.json`)
@@ -122,11 +132,16 @@ python vision/test_hit.py 0.5 0.5 red
 - `diff_threshold` — raise if projector flicker causes false motion.
 - `min_speed` — minimum ball speed in px/frame; lower it if soft throws
   are missed.
+- `min_turn_deg` — how sharply the trajectory must break to count as
+  contact (default 60°). Raise toward 90 if passing balls false-trigger;
+  lower toward 45 if soft contacts are missed.
+- `min_track_frames` — a blob must have been tracked this many frames
+  before it may fire, so something just appearing on camera can't be a hit.
 - `cooldown_ms` / `cooldown_radius` — double-hit suppression (a ball
   bouncing twice near the same spot counts once).
 - `colors` — HSV ranges used to name the ball color (`h` 0–179, OpenCV
-  convention; `red` wraps around). Tune them in your actual room lighting:
-  the projector tints the balls.
+  convention). Ships with `lightblue` and `orange`. Tune them in your
+  actual room lighting: the projector tints the balls.
 
 ## Practical tips
 
@@ -146,6 +161,6 @@ Build it in `godot/` against plain mouse clicks — targets, buttons,
 the ball color (team play!), connect to the autoload's signal instead:
 
 ```gdscript
-BallInput.ball_hit.connect(func(pos: Vector2, color: String):
-    print("ball hit at ", pos, " color ", color))
+BallInput.ball_hit.connect(func(pos: Vector2, color: String, radius_px: float):
+    print("ball hit at ", pos, " color ", color, " size ", radius_px))
 ```

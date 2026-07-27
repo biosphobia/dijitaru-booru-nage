@@ -34,30 +34,43 @@ class Track:
 
     _next_id = 0
 
-    def __init__(self, pos, frame_idx):
+    def __init__(self, pos, radius, frame_idx):
         self.id = Track._next_id
         Track._next_id += 1
         self.positions = deque(maxlen=8)  # processing-scale pixels
+        self.radii = deque(maxlen=8)
         self.positions.append(pos)
+        self.radii.append(radius)
         self.last_seen = frame_idx
         self.hit_fired = False
 
-    def add(self, pos, frame_idx):
+    def add(self, pos, radius, frame_idx):
         self.positions.append(pos)
+        self.radii.append(radius)
         self.last_seen = frame_idx
 
 
 def classify_color(frame_bgr, pos, radius, color_defs):
-    """Median HSV inside a small disc around pos -> color name or 'unknown'."""
+    """Ball color near pos -> color name or 'unknown'.
+
+    The sample patch inevitably contains background pixels (the blob
+    centroid lags the ball), so classify by the median of only the
+    *colorful* pixels in the patch instead of the whole-patch median.
+    """
     h, w = frame_bgr.shape[:2]
     x, y = int(pos[0]), int(pos[1])
-    r = max(3, int(radius))
+    r = max(4, int(radius))
     x0, x1 = max(0, x - r), min(w, x + r)
     y0, y1 = max(0, y - r), min(h, y + r)
     if x0 >= x1 or y0 >= y1:
         return "unknown"
-    patch = cv2.cvtColor(frame_bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
-    hue, sat, val = np.median(patch.reshape(-1, 3), axis=0)
+    patch = cv2.cvtColor(frame_bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    lowest_s = min((c.get("s_min", 60) for c in color_defs), default=60)
+    lowest_v = min((c.get("v_min", 60) for c in color_defs), default=60)
+    colorful = patch[(patch[:, 1] >= lowest_s) & (patch[:, 2] >= lowest_v)]
+    if len(colorful) < max(8, 0.1 * len(patch)):
+        return "unknown"
+    hue, sat, val = np.median(colorful, axis=0)
     for c in color_defs:
         if sat < c.get("s_min", 60) or val < c.get("v_min", 60):
             continue
@@ -88,6 +101,13 @@ def main():
     max_match_dist = det.get("max_match_dist", 90.0)
     track_timeout = det.get("track_timeout_frames", 5)
     mode = det.get("mode", "reversal")
+    # contact = a sharp trajectory break: the direction must change by at
+    # least this many degrees between incoming and outgoing motion
+    min_turn_deg = det.get("min_turn_deg", 60.0)
+    min_cos = np.cos(np.radians(min_turn_deg))
+    # a blob must have been tracked this many frames before it can fire -
+    # something merely appearing inside the projection is never a hit
+    min_track_frames = det.get("min_track_frames", 3)
     cooldown_ms = det.get("cooldown_ms", 250)
     cooldown_radius = det.get("cooldown_radius", 0.06)  # normalized game units
     preview = config.get("preview", True)
@@ -156,10 +176,10 @@ def main():
                 if d < best_d:
                     best, best_d = i, d
             if best is not None:
-                track.add(detections[best][0], frame_idx)
+                track.add(detections[best][0], detections[best][1], frame_idx)
                 unmatched.remove(best)
         for i in unmatched:
-            tracks.append(Track(detections[i][0], frame_idx))
+            tracks.append(Track(detections[i][0], detections[i][1], frame_idx))
         tracks = [t for t in tracks if frame_idx - t.last_seen <= track_timeout]
 
         # --- hit detection ----------------------------------------------
@@ -168,30 +188,45 @@ def main():
                 continue
             p = track.positions
             hit_pos = None
+            hit_radius = 0.0
             if mode == "instant" and len(p) >= 2:
                 if np.hypot(p[-1][0] - p[-2][0], p[-1][1] - p[-2][1]) >= min_speed:
                     hit_pos = p[-1]
-            elif mode == "reversal":
-                # Compare velocity before vs after a candidate turning point.
-                # span=1 catches a clean flip between adjacent frames; span=2
-                # skips over the near-stationary frame at the bounce apex.
+                    hit_radius = track.radii[-1]
+            elif mode == "reversal" and len(p) >= min_track_frames:
+                # Wall contact = a sharp break in the trajectory: the blob was
+                # moving fast, then its direction changed by >= min_turn_deg
+                # (a clean bounce flips ~180 deg; a dead bounce that drops
+                # down the wall turns ~90 deg - both count). span=1 catches a
+                # flip between adjacent frames; span=2 skips over the
+                # near-stationary frame right at the impact point.
                 for span in (1, 2):
                     if len(p) < 2 * span + 1:
                         continue
                     mid = -1 - span
                     v1 = (p[mid][0] - p[mid - span][0], p[mid][1] - p[mid - span][1])
                     v2 = (p[-1][0] - p[mid][0], p[-1][1] - p[mid][1])
-                    incoming_speed = np.hypot(*v1) / span
-                    if incoming_speed >= min_speed and (v1[0] * v2[0] + v1[1] * v2[1]) < 0:
+                    n1, n2 = np.hypot(*v1), np.hypot(*v2)
+                    incoming_speed = n1 / span
+                    if incoming_speed < min_speed or n2 < 1e-6:
+                        continue
+                    cos_turn = (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)
+                    if cos_turn <= min_cos:
                         hit_pos = p[mid]  # the turning point = the wall contact
+                        hit_radius = track.radii[mid]
                         break
             if hit_pos is None:
                 continue
             track.hit_fired = True
 
-            norm = camera_to_game(
-                [hit_pos], homography, (small.shape[1], small.shape[0]), calib_size
-            )[0]
+            # Transform the hit point plus a point one ball-radius away, so
+            # the game can draw the mark at the ball's real projected size.
+            mapped = camera_to_game(
+                [hit_pos, (hit_pos[0] + hit_radius, hit_pos[1])],
+                homography, (small.shape[1], small.shape[0]), calib_size,
+            )
+            norm = mapped[0]
+            r_norm = float(np.hypot(*(mapped[1] - mapped[0])))  # fraction of screen width-ish
             if not (-0.02 <= norm[0] <= 1.02 and -0.02 <= norm[1] <= 1.02):
                 continue  # outside the projected game area
             norm = np.clip(norm, 0.0, 1.0)
@@ -216,6 +251,7 @@ def main():
                 "type": "hit",
                 "x": round(float(norm[0]), 4),
                 "y": round(float(norm[1]), 4),
+                "r": round(r_norm, 4),
                 "color": color,
             }
             sock.sendto(json.dumps(packet).encode("utf-8"), udp_addr)
