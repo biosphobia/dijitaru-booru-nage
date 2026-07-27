@@ -123,12 +123,15 @@ jobs:
             - Windows: `DijitaruBooruNage-windows.zip` - unzip, run the .exe
             - macOS: `DijitaruBooruNage-macos.zip` - unzip, right-click the app > Open (first launch only)
 
-            **Camera tool** (same PC, needs the webcam):
+            **Camera tool** (same PC, needs the camera):
             - Windows: `BooruVision-windows.zip` - unzip, double-click `BooruVision.exe`, pick from the menu.
               If Windows SmartScreen complains: "More info" > "Run anyway".
             - macOS: `BooruVision-macos-applesilicon.zip` (M1/M2/M3/M4) or `BooruVision-macos-intel.zip`
               (older Intel Macs) - unzip, then first time run `xattr -cr BooruVision` in Terminal,
               then double-click it.
+
+            Defaults are for a regular webcam. Using a PS3 Eye on Windows? Install the
+            PS3EyeDirectShow driver and see the README section "Using a PS3 Eye camera".
 
             Config and calibration files are created next to the executable on first run.
           files: downloads/*.zip

@@ -1,0 +1,272 @@
+extends Node
+## Model Studio: photograph a person from up to 4 angles with the tracking
+## camera, send the photos to Meshy.ai (via the vision tool) to build a
+## rigged 3D model, watch the progress live, and view the result rotating
+## in 3D. Models live in your Meshy cloud account; the newest downloaded
+## one is also cached locally so it shows up again after a restart.
+##
+## The vision tool (BooruVision detect) must be running - it owns the
+## camera and talks to the Meshy API. This screen only sends commands and
+## renders what comes back.
+
+const CFG_PATH := "user://studio.cfg"
+const CACHE_PATH := "user://latest_model.glb"
+const DEFAULT_PROMPT := "ゲームキャラクター、カラフル"
+
+## Japanese text for error codes sent by vision/studio.py.
+const ERROR_TEXT := {
+	"no_key": "APIキー未設定（config.json）",
+	"no_photos": "写真がありません",
+	"busy": "処理中です",
+	"capture_failed": "撮影失敗",
+	"photos_full": "写真は4枚まで（クリアしてください）",
+	"file_failed": "ファイル読込失敗",
+}
+const STAGE_TEXT := {
+	"model": "3Dモデル生成中",
+	"rig": "リギング中",
+	"list": "読込中",
+}
+
+var _prompt: LineEdit
+var _photos_label: Label
+var _status: Label
+var _progress: ProgressBar
+var _viewfinder: TextureRect
+var _file_dialog: FileDialog
+var _holder: Node3D
+var _http: HTTPRequest
+var _downloading := false
+
+func _ready() -> void:
+	var ui := CanvasLayer.new()
+	add_child(ui)
+
+	var root := HBoxContainer.new()
+	root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	root.add_theme_constant_override("separation", 20)
+	ui.add_child(root)
+
+	# -- left: controls ---------------------------------------------------
+	var panel := VBoxContainer.new()
+	panel.custom_minimum_size = Vector2(430, 0)
+	panel.add_theme_constant_override("separation", 12)
+	root.add_child(panel)
+
+	panel.add_child(_label("モデルスタジオ", 34))
+
+	# live camera viewfinder (frames streamed from the vision tool)
+	_viewfinder = TextureRect.new()
+	_viewfinder.custom_minimum_size = Vector2(410, 230)
+	_viewfinder.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_viewfinder.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	panel.add_child(_viewfinder)
+
+	_photos_label = _label("写真 0 / 4", 22)
+	panel.add_child(_photos_label)
+
+	var photo_row := HBoxContainer.new()
+	photo_row.add_theme_constant_override("separation", 10)
+	photo_row.add_child(_button("撮影", _on_capture))
+	photo_row.add_child(_button("ファイル追加", _on_add_file))
+	photo_row.add_child(_button("クリア", _on_clear))
+	panel.add_child(photo_row)
+
+	_file_dialog = FileDialog.new()
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
+	_file_dialog.use_native_dialog = true
+	_file_dialog.filters = PackedStringArray(["*.jpg,*.jpeg,*.png ; 画像"])
+	_file_dialog.files_selected.connect(_on_files_selected)
+	add_child(_file_dialog)
+
+	_prompt = LineEdit.new()
+	_prompt.text = DEFAULT_PROMPT
+	_prompt.placeholder_text = "テクスチャプロンプト"
+	_prompt.custom_minimum_size = Vector2(0, 40)
+	panel.add_child(_prompt)
+
+	panel.add_child(_button("3Dモデル生成", _on_generate))
+	panel.add_child(_button("クラウドから読込", _on_load_latest))
+
+	_progress = ProgressBar.new()
+	_progress.min_value = 0
+	_progress.max_value = 100
+	_progress.custom_minimum_size = Vector2(0, 26)
+	panel.add_child(_progress)
+
+	_status = _label("待機中", 16)
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	panel.add_child(_status)
+
+	# -- right: 3D view ---------------------------------------------------
+	var view := SubViewportContainer.new()
+	view.stretch = true
+	view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_child(view)
+
+	var vp := SubViewport.new()
+	vp.own_world_3d = true
+	vp.transparent_bg = true
+	view.add_child(vp)
+
+	var cam := Camera3D.new()
+	vp.add_child(cam)
+	cam.position = Vector3(0.0, 1.1, 2.8)
+
+	var light := DirectionalLight3D.new()
+	vp.add_child(light)
+	light.rotation_degrees = Vector3(-40.0, 30.0, 0.0)
+
+	_holder = Node3D.new()
+	vp.add_child(_holder)
+	cam.look_at(Vector3(0.0, 0.9, 0.0))
+
+	_http = HTTPRequest.new()
+	add_child(_http)
+	_http.request_completed.connect(_on_download_done)
+
+	BallInput.meshy_event.connect(_on_meshy_event)
+	_load_prompt()
+	_load_cached_model()
+	BallInput.send_command({"cmd": "preview", "on": true})
+
+func _process(delta: float) -> void:
+	_holder.rotate_y(0.6 * delta)
+
+func _exit_tree() -> void:
+	BallInput.send_command({"cmd": "preview", "on": false})
+	_save_prompt()
+
+# -- UI helpers -----------------------------------------------------------
+
+func _label(text: String, size: int) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", size)
+	return label
+
+func _button(text: String, on_pressed: Callable) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(0, 44)
+	button.add_theme_font_size_override("font_size", 19)
+	button.pressed.connect(on_pressed)
+	return button
+
+# -- commands to the vision tool ------------------------------------------
+
+func _on_capture() -> void:
+	BallInput.send_command({"cmd": "capture"})
+
+func _on_add_file() -> void:
+	_file_dialog.popup_centered_ratio(0.7)
+
+func _on_files_selected(paths: PackedStringArray) -> void:
+	for path in paths:
+		BallInput.send_command({"cmd": "add_file", "path": path})
+
+func _on_clear() -> void:
+	BallInput.send_command({"cmd": "clear"})
+
+func _on_generate() -> void:
+	_save_prompt()
+	_progress.value = 0
+	_status.text = "送信中…"
+	BallInput.send_command({"cmd": "generate", "prompt": _prompt.text})
+
+func _on_load_latest() -> void:
+	_status.text = "読込中…"
+	BallInput.send_command({"cmd": "list"})
+
+# -- events back from the vision tool -------------------------------------
+
+func _on_meshy_event(data: Dictionary) -> void:
+	match str(data.get("event", "")):
+		"frame":
+			_show_preview_frame(str(data.get("jpg", "")))
+		"photos":
+			_photos_label.text = "写真 %d / 4" % int(data.get("count", 0))
+		"status":
+			var stage := str(data.get("stage", ""))
+			var progress := int(data.get("progress", 0))
+			_status.text = "%s… %d%%" % [STAGE_TEXT.get(stage, stage), progress]
+			_progress.value = progress
+		"model_ready":
+			_progress.value = 100
+			_download(str(data.get("model_url", "")))
+		"models":
+			var items: Array = data.get("items", [])
+			if items.is_empty():
+				_status.text = "保存済みモデルなし"
+			else:
+				_download(str(items[0].get("model_url", "")))
+		"error":
+			var code := str(data.get("code", ""))
+			_status.text = ERROR_TEXT.get(code, "エラー: %s" % str(data.get("message", "")))
+
+func _show_preview_frame(jpg_base64: String) -> void:
+	if jpg_base64.is_empty():
+		return
+	var bytes := Marshalls.base64_to_raw(jpg_base64)
+	var img := Image.new()
+	if img.load_jpg_from_buffer(bytes) == OK:
+		_viewfinder.texture = ImageTexture.create_from_image(img)
+
+# -- model download + display ---------------------------------------------
+
+func _download(url: String) -> void:
+	if url.is_empty() or _downloading:
+		return
+	_downloading = true
+	_status.text = "ダウンロード中…"
+	var err := _http.request(url)
+	if err != OK:
+		_downloading = false
+		_status.text = "ダウンロード失敗（%d）" % err
+
+func _on_download_done(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	_downloading = false
+	if code != 200 or body.is_empty():
+		_status.text = "ダウンロード失敗（HTTP %d）" % code
+		return
+	var file := FileAccess.open(CACHE_PATH, FileAccess.WRITE)
+	if file:
+		file.store_buffer(body)
+		file.close()
+	if _show_glb(body):
+		_status.text = "完了"
+	else:
+		_status.text = "モデルを表示できません"
+
+func _show_glb(bytes: PackedByteArray) -> bool:
+	var doc := GLTFDocument.new()
+	var state := GLTFState.new()
+	if doc.append_from_buffer(bytes, "", state) != OK:
+		return false
+	var scene := doc.generate_scene(state)
+	if scene == null:
+		return false
+	for child in _holder.get_children():
+		child.queue_free()
+	_holder.add_child(scene)
+	return true
+
+func _load_cached_model() -> void:
+	if not FileAccess.file_exists(CACHE_PATH):
+		return
+	var bytes := FileAccess.get_file_as_bytes(CACHE_PATH)
+	if not bytes.is_empty() and _show_glb(bytes):
+		_status.text = "前回のモデル"
+
+# -- prompt persistence ----------------------------------------------------
+
+func _load_prompt() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(CFG_PATH) == OK:
+		_prompt.text = str(cfg.get_value("studio", "prompt", DEFAULT_PROMPT))
+
+func _save_prompt() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("studio", "prompt", _prompt.text)
+	cfg.save(CFG_PATH)

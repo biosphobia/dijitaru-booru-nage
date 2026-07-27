@@ -6,7 +6,14 @@
   "capture_fps": 60,
   "udp_host": "127.0.0.1",
   "udp_port": 4242,
+  "udp_cmd_port": 4243,
   "preview": true,
+  "meshy": {
+    "api_key": "",
+    "ai_model": "latest",
+    "rig": true,
+    "height_meters": 1.7
+  },
   "detection": {
     "mode": "reversal",
     "processing_width": 640,
@@ -15,16 +22,15 @@
     "max_area": 2500,
     "min_circularity": 0.4,
     "min_speed": 6.0,
+    "min_turn_deg": 60.0,
+    "min_track_frames": 3,
     "max_match_dist": 90.0,
     "track_timeout_frames": 5,
     "cooldown_ms": 250,
     "cooldown_radius": 0.06
   },
   "colors": [
-    { "name": "red", "h_min": 170, "h_max": 10, "s_min": 80, "v_min": 60 },
-    { "name": "orange", "h_min": 11, "h_max": 25, "s_min": 80, "v_min": 60 },
-    { "name": "yellow", "h_min": 26, "h_max": 40, "s_min": 80, "v_min": 60 },
-    { "name": "green", "h_min": 41, "h_max": 85, "s_min": 60, "v_min": 50 },
-    { "name": "blue", "h_min": 95, "h_max": 130, "s_min": 60, "v_min": 50 }
+    { "name": "lightblue", "h_min": 80, "h_max": 110, "s_min": 40, "v_min": 90 },
+    { "name": "orange", "h_min": 5, "h_max": 25, "s_min": 80, "v_min": 70 }
   ]
 }

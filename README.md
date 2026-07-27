@@ -2,6 +2,15 @@
 
 Throw ping pong balls at a wall, hit targets in a projected Godot game.
 
+The game opens on a menu with two modes:
+
+- **Ball Game** — the ball popup test game (throw a ball, pop the target).
+- **Model Studio** — photograph a person from up to 4 angles with the
+  tracking camera and turn them into a **rigged 3D model** via
+  [Meshy.ai](https://www.meshy.ai), with live progress and a rotating 3D
+  preview in-game. Models are stored in your Meshy cloud account, so they
+  survive the game being closed; the newest one is also cached locally.
+
 A webcam watches the projected image. A Python script detects ball impacts
 (a fast round blob whose direction suddenly reverses = a bounce off the
 wall), converts the impact point to game coordinates with a homography, and
@@ -28,28 +37,49 @@ Grab the newest builds from the [Releases page](../../releases) — every
 push to `main` refreshes the **Latest build** pre-release. Nothing needs
 to be installed on the PC, not even Python: download, unzip, run.
 
-**The game** (put on the PC driving the projector):
-
-- **Windows**: `DijitaruBooruNage-windows.zip` — unzip anywhere,
-  double-click the `.exe`.
-- **macOS**: `DijitaruBooruNage-macos.zip` — unzip, then
-  **right-click the app > Open** the first time (the app is unsigned, so
-  a normal double-click is blocked by Gatekeeper once). If macOS still
-  refuses: `xattr -cr "Dijitaru Booru Nage.app"` in a terminal.
-
-**The camera tool** (same PC, the one the webcam is plugged into) — a
-single portable executable with calibrate/detect built in:
-
-- **Windows**: `BooruVision-windows.zip` — unzip, double-click
+- **Game**: `DijitaruBooruNage-windows.zip` — unzip anywhere,
+  double-click the `.exe`. Put it on the PC driving the projector.
+- **Camera tool**: `BooruVision-windows.zip` — a single portable
+  executable with calibrate/detect built in. Unzip, double-click
   `BooruVision.exe`, pick from the menu (1 = calibrate, 2 = detect). If
   SmartScreen complains: "More info" > "Run anyway".
-- **macOS**: `BooruVision-macos-applesilicon.zip` (M1/M2/M3/M4) or
-  `BooruVision-macos-intel.zip` (older Intel Macs) — unzip, run
-  `xattr -cr BooruVision` in Terminal once, then double-click it.
+
+macOS versions of both downloads are also on the Releases page — unzip,
+then **right-click > Open** the app the first time (they are unsigned; for
+the camera tool run `xattr -cr BooruVision` in Terminal once instead).
 
 `config.json` (tuning) and `calibration.json` are created **next to the
 executable** on first run, so the whole thing lives in one folder — a USB
 stick works fine.
+
+Defaults are for a **regular webcam** (720p, MJPG, 60 fps requested) —
+including Mac built-in cameras.
+
+## Using a PS3 Eye camera (Windows)
+
+The PS3 Eye is a great tracking camera — cheap and it does a true
+**60 fps at 640x480**. To use one, set `capture_width` to `640`,
+`capture_height` to `480` and `fourcc` to `""` in `config.json`. It is
+*not* a standard webcam though, so Windows needs a one-time driver
+install (the only install the whole project needs):
+
+1. Download the installer from the
+   [PS3EyeDirectShow releases](https://github.com/jkevin/PS3EyeDirectShow/releases)
+   (or the [AllanCat fork](https://github.com/AllanCat/PS3EyeDirectShow)
+   with multi-camera and app-compatibility fixes). It installs a generic
+   WinUSB driver plus a DirectShow filter, which makes the PS3 Eye show
+   up as a normal Windows camera.
+2. Plug in the camera, then run `BooruVision.exe` — if another camera is
+   also connected and the wrong one opens, change `camera_index` in
+   `config.json` (0, 1, 2...).
+
+Avoid the old CL-Eye driver — it is unmaintained and breaks on modern
+Windows. The opentrack "open driver" also won't work here: it only feeds
+opentrack, not other camera apps.
+
+Using a **regular webcam** instead: set `capture_width`/`capture_height`
+to `1280`/`720` and `fourcc` to `"MJPG"` in `config.json` so it can reach
+60 fps.
 
 ## Setup from source (for developing)
 
@@ -84,15 +114,50 @@ stick works fine.
 python vision/detect.py
 ```
 
-Throw a ball at the wall. Each detected impact prints `HIT {...}` in the
-terminal and clicks the game at that spot: a small ripple shows where the
-hit landed, and if it hit the ball, the ball pops and a new one appears.
+Throw a ball at the wall. A hit only registers on **contact** — the
+tracker watches for the ball's trajectory to break sharply (the bounce);
+a ball merely flying across the projection does nothing. Each impact
+prints `HIT {...}` in the terminal and clicks the game at that spot: a
+mark in the ball's color (light blue / orange) and at the ball's real
+projected size appears there and fades out, so you can compare it
+against where the ball actually struck. If it hit the white game ball,
+that pops and a new one appears.
 
 No camera handy? Test the game side alone:
 
 ```
-python vision/test_hit.py 0.5 0.5 red
+python vision/test_hit.py 0.5 0.5 orange
 ```
+
+## Model Studio (Meshy.ai)
+
+One-time setup: get an API key from
+[Meshy API settings](https://www.meshy.ai/settings/api) and put it in
+`config.json` next to the camera tool:
+
+```json
+"meshy": { "api_key": "msy-...", "ai_model": "latest", "rig": true, "height_meters": 1.7 }
+```
+
+Then, with the camera tool running (`detect`), pick **Model Studio** in
+the game menu:
+
+1. A live camera viewfinder shows in the game. Stand in front of the
+   camera and click 「撮影」 for 1–4 angles (front / side / back work
+   best), or add existing image files with 「ファイル追加」. Photos are
+   also saved to `photos/` next to the tool.
+2. Edit the **texture prompt** in the game at any time (saved between
+   sessions).
+3. Click **Generate 3D model** — the progress bar tracks Meshy in real
+   time (model build, then automatic rigging; rigging needs a clear
+   humanoid pose and falls back to the unrigged model if it fails).
+4. The finished model appears rotating in the 3D view. It lives in your
+   Meshy account (**Load newest from Meshy cloud** re-fetches it any
+   time) and is cached locally so it reappears after a restart.
+
+Costs credits per generation on your Meshy account. The whole Meshy
+conversation runs through the camera tool, so the game itself never
+needs the API key.
 
 ## Tuning (`vision/config.json`)
 
@@ -106,11 +171,16 @@ python vision/test_hit.py 0.5 0.5 red
 - `diff_threshold` — raise if projector flicker causes false motion.
 - `min_speed` — minimum ball speed in px/frame; lower it if soft throws
   are missed.
+- `min_turn_deg` — how sharply the trajectory must break to count as
+  contact (default 60°). Raise toward 90 if passing balls false-trigger;
+  lower toward 45 if soft contacts are missed.
+- `min_track_frames` — a blob must have been tracked this many frames
+  before it may fire, so something just appearing on camera can't be a hit.
 - `cooldown_ms` / `cooldown_radius` — double-hit suppression (a ball
   bouncing twice near the same spot counts once).
 - `colors` — HSV ranges used to name the ball color (`h` 0–179, OpenCV
-  convention; `red` wraps around). Tune them in your actual room lighting:
-  the projector tints the balls.
+  convention). Ships with `lightblue` and `orange`. Tune them in your
+  actual room lighting: the projector tints the balls.
 
 ## Practical tips
 
@@ -130,6 +200,6 @@ Build it in `godot/` against plain mouse clicks — targets, buttons,
 the ball color (team play!), connect to the autoload's signal instead:
 
 ```gdscript
-BallInput.ball_hit.connect(func(pos: Vector2, color: String):
-    print("ball hit at ", pos, " color ", color))
+BallInput.ball_hit.connect(func(pos: Vector2, color: String, radius_px: float):
+    print("ball hit at ", pos, " color ", color, " size ", radius_px))
 ```

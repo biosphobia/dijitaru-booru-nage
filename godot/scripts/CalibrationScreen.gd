@@ -34,7 +34,7 @@ func _ready() -> void:
 		_rects.append(rect)
 
 	var label := Label.new()
-	label.text = "CALIBRATION\nRun vision/calibrate.py, then press C to return to the game"
+	label.text = "キャリブレーション（C で戻る）"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_color_override("font_color", Color.BLACK)
 	label.add_theme_font_size_override("font_size", 28)

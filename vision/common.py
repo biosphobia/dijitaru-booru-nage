@@ -16,6 +16,8 @@ else:
 CONFIG_PATH = os.path.join(HERE, "config.json")
 CALIBRATION_PATH = os.path.join(HERE, "calibration.json")
 
+# Defaults are for a regular webcam (720p + MJPG so it can reach 60 fps).
+# For a PS3 Eye set capture_width/height to 640/480 and fourcc to "".
 DEFAULT_CONFIG = {
     "camera_index": 0,
     "fourcc": "MJPG",
@@ -24,7 +26,14 @@ DEFAULT_CONFIG = {
     "capture_fps": 60,
     "udp_host": "127.0.0.1",
     "udp_port": 4242,
+    "udp_cmd_port": 4243,
     "preview": True,
+    "meshy": {
+        "api_key": "",
+        "ai_model": "latest",
+        "rig": True,
+        "height_meters": 1.7,
+    },
     "detection": {
         "mode": "reversal",
         "processing_width": 640,
@@ -33,17 +42,16 @@ DEFAULT_CONFIG = {
         "max_area": 2500,
         "min_circularity": 0.4,
         "min_speed": 6.0,
+        "min_turn_deg": 60.0,
+        "min_track_frames": 3,
         "max_match_dist": 90.0,
         "track_timeout_frames": 5,
         "cooldown_ms": 250,
         "cooldown_radius": 0.06,
     },
     "colors": [
-        {"name": "red", "h_min": 170, "h_max": 10, "s_min": 80, "v_min": 60},
-        {"name": "orange", "h_min": 11, "h_max": 25, "s_min": 80, "v_min": 60},
-        {"name": "yellow", "h_min": 26, "h_max": 40, "s_min": 80, "v_min": 60},
-        {"name": "green", "h_min": 41, "h_max": 85, "s_min": 60, "v_min": 50},
-        {"name": "blue", "h_min": 95, "h_max": 130, "s_min": 60, "v_min": 50},
+        {"name": "lightblue", "h_min": 80, "h_max": 110, "s_min": 40, "v_min": 90},
+        {"name": "orange", "h_min": 5, "h_max": 25, "s_min": 80, "v_min": 70},
     ],
 }
 
@@ -113,7 +121,9 @@ def open_camera(config):
             "> Camera)." % index
         )
 
-    # MJPG lets most USB webcams deliver 720p at 60 fps instead of 5-30.
+    # Optional pixel-format override. "MJPG" lets most USB webcams reach
+    # 60 fps at 720p (harmlessly ignored where unsupported, e.g. macOS
+    # built-in cameras); set to "" for raw-frame cameras like the PS3 Eye.
     fourcc = config.get("fourcc", "MJPG")
     if fourcc:
         cam.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))

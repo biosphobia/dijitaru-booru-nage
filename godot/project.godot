@@ -19,6 +19,10 @@ BallInput="*res://scripts/BallInput.gd"
 window/size/viewport_width=1280
 window/size/viewport_height=720
 
+[gui]
+
+theme/custom_font="res://assets/fonts/NotoSansJP-Regular.ttf"
+
 [rendering]
 
 textures/vram_compression/import_etc2_astc=true
