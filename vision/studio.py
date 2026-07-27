@@ -51,7 +51,9 @@ class MeshyStudio:
 
     def handle(self, cmd, frame):
         name = cmd.get("cmd", "")
-        if name == "capture":
+        if name == "ping":
+            self._event("pong")
+        elif name == "capture":
             self._capture(frame)
         elif name == "add_file":
             self._add_file(str(cmd.get("path", "")))

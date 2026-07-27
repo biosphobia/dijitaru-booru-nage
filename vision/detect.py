@@ -87,7 +87,15 @@ def classify_color(frame_bgr, pos, radius, color_defs):
 
 def main():
     config = load_config()
-    homography, calib_size = load_calibration()
+    # Calibration is only needed to map ball hits to game coordinates.
+    # The camera, the Model Studio and the live viewfinder must work
+    # without it, so start anyway and just disable hit detection.
+    try:
+        homography, calib_size = load_calibration()
+    except SystemExit as e:
+        print("WARNING: %s" % e)
+        print("Running WITHOUT hit detection (camera + Model Studio only).")
+        homography, calib_size = None, None
     cam = open_camera(config)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -154,6 +162,17 @@ def main():
         h, w = frame.shape[:2]
         scale = proc_width / float(w)
         small = cv2.resize(frame, (proc_width, int(h * scale)))
+
+        if homography is None:
+            # uncalibrated: camera + studio only, no hit detection
+            if preview:
+                cv2.putText(small, "NO CALIBRATION - hits disabled", (10, 25),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                cv2.imshow("detect", small)
+                if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                    break
+            continue
+
         recent_frames.append(small)
         gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
 

@@ -40,6 +40,8 @@ var _file_dialog: FileDialog
 var _holder: Node3D
 var _http: HTTPRequest
 var _downloading := false
+var _connected := false
+var _last_pong_ms := 0
 
 func _ready() -> void:
 	var ui := CanvasLayer.new()
@@ -146,6 +148,14 @@ func _ready() -> void:
 	_load_cached_model()
 	BallInput.send_command({"cmd": "preview", "on": true})
 
+	# heartbeat: detect whether the camera tool is actually running
+	var ping_timer := Timer.new()
+	ping_timer.wait_time = 1.5
+	ping_timer.timeout.connect(_on_ping_tick)
+	add_child(ping_timer)
+	ping_timer.start()
+	_on_ping_tick()
+
 func _process(delta: float) -> void:
 	_holder.rotate_y(0.6 * delta)
 
@@ -184,6 +194,13 @@ func _on_files_selected(paths: PackedStringArray) -> void:
 func _on_clear() -> void:
 	BallInput.send_command({"cmd": "clear"})
 
+func _on_ping_tick() -> void:
+	BallInput.send_command({"cmd": "ping"})
+	if _connected and Time.get_ticks_msec() - _last_pong_ms > 5000:
+		_connected = false
+	if not _connected:
+		_status.text = "カメラツール未接続"
+
 func _on_save_key() -> void:
 	if _api_key.text.strip_edges().is_empty():
 		return
@@ -203,6 +220,13 @@ func _on_load_latest() -> void:
 
 func _on_meshy_event(data: Dictionary) -> void:
 	match str(data.get("event", "")):
+		"pong":
+			_last_pong_ms = Time.get_ticks_msec()
+			if not _connected:
+				_connected = true
+				_status.text = "待機中"
+				# the tool may have started after this screen opened
+				BallInput.send_command({"cmd": "preview", "on": true})
 		"frame":
 			_show_preview_frame(str(data.get("jpg", "")))
 		"photos":
