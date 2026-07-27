@@ -48,7 +48,7 @@ func _ready() -> void:
 
 	var title := Label.new()
 	title.text = "デジタルボール投げ"
-	title.add_theme_font_size_override("font_size", 52)
+	title.add_theme_font_size_override("font_size", 72)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
@@ -57,7 +57,7 @@ func _ready() -> void:
 
 	var hint := Label.new()
 	hint.text = "C: キャリブレーション　F: 全画面　Esc: 戻る"
-	hint.add_theme_font_size_override("font_size", 18)
+	hint.add_theme_font_size_override("font_size", 24)
 	hint.modulate = Color(1, 1, 1, 0.6)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(hint)
@@ -70,8 +70,8 @@ func _ready() -> void:
 func _menu_button(text: String, on_pressed: Callable) -> Button:
 	var button := Button.new()
 	button.text = text
-	button.custom_minimum_size = Vector2(340, 64)
-	button.add_theme_font_size_override("font_size", 28)
+	button.custom_minimum_size = Vector2(480, 88)
+	button.add_theme_font_size_override("font_size", 38)
 	button.pressed.connect(on_pressed)
 	return button
 

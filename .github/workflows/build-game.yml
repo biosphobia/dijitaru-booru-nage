@@ -109,14 +109,28 @@ jobs:
       - name: List downloads
         run: ls -la downloads
 
-      - name: Update rolling "latest" release
+      # Recreate the release instead of updating in place: an in-place
+      # update keeps the original publish date and old tag commit on the
+      # releases page, which makes fresh builds look stale.
+      - name: Delete previous "latest" release and tag
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --repo "$GITHUB_REPOSITORY" --yes || true
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/latest" || true
+
+      - name: Publish rolling "latest" release
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
+          target_commitish: ${{ github.sha }}
           name: Latest build
           prerelease: true
           body: |
+            Build #${{ github.run_number }} - commit ${{ github.sha }}
+
             Automatic build of the newest version. Nothing to install - download, unzip, run.
 
             **Game** (put this on the projector PC):

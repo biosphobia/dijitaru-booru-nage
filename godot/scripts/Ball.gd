@@ -4,7 +4,7 @@ extends Area2D
 
 signal popped
 
-const RADIUS := 55.0
+const RADIUS := 72.0
 const POP_TIME := 0.22
 
 var _popping := false

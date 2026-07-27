@@ -37,7 +37,7 @@ func _ready() -> void:
 	label.text = "キャリブレーション（C で戻る）"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.add_theme_color_override("font_color", Color.BLACK)
-	label.add_theme_font_size_override("font_size", 28)
+	label.add_theme_font_size_override("font_size", 38)
 	label.set_anchors_preset(Control.PRESET_CENTER)
 	label.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	label.grow_vertical = Control.GROW_DIRECTION_BOTH

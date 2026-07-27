@@ -77,6 +77,15 @@ def load_config():
         return json.load(f)
 
 
+def update_meshy_config(updates):
+    """Merge fields into the config's 'meshy' block and persist it."""
+    cfg = load_config()
+    cfg.setdefault("meshy", {}).update(updates)
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
+    return cfg
+
+
 def save_calibration(homography, frame_size):
     data = {
         "homography": np.asarray(homography).tolist(),
