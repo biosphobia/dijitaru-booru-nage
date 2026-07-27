@@ -149,6 +149,7 @@ def main():
                 continue
             if isinstance(cmd, dict):
                 studio.handle(cmd, frame)
+        studio.stream_frame(frame)
 
         h, w = frame.shape[:2]
         scale = proc_width / float(w)

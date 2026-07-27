@@ -20,6 +20,7 @@ const ERROR_TEXT := {
 	"busy": "処理中です",
 	"capture_failed": "撮影失敗",
 	"photos_full": "写真は4枚まで（クリアしてください）",
+	"file_failed": "ファイル読込失敗",
 }
 const STAGE_TEXT := {
 	"model": "3Dモデル生成中",
@@ -31,6 +32,8 @@ var _prompt: LineEdit
 var _photos_label: Label
 var _status: Label
 var _progress: ProgressBar
+var _viewfinder: TextureRect
+var _file_dialog: FileDialog
 var _holder: Node3D
 var _http: HTTPRequest
 var _downloading := false
@@ -52,14 +55,30 @@ func _ready() -> void:
 
 	panel.add_child(_label("モデルスタジオ", 34))
 
+	# live camera viewfinder (frames streamed from the vision tool)
+	_viewfinder = TextureRect.new()
+	_viewfinder.custom_minimum_size = Vector2(410, 230)
+	_viewfinder.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_viewfinder.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	panel.add_child(_viewfinder)
+
 	_photos_label = _label("写真 0 / 4", 22)
 	panel.add_child(_photos_label)
 
 	var photo_row := HBoxContainer.new()
 	photo_row.add_theme_constant_override("separation", 10)
 	photo_row.add_child(_button("撮影", _on_capture))
+	photo_row.add_child(_button("ファイル追加", _on_add_file))
 	photo_row.add_child(_button("クリア", _on_clear))
 	panel.add_child(photo_row)
+
+	_file_dialog = FileDialog.new()
+	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
+	_file_dialog.use_native_dialog = true
+	_file_dialog.filters = PackedStringArray(["*.jpg,*.jpeg,*.png ; 画像"])
+	_file_dialog.files_selected.connect(_on_files_selected)
+	add_child(_file_dialog)
 
 	_prompt = LineEdit.new()
 	_prompt.text = DEFAULT_PROMPT
@@ -110,11 +129,13 @@ func _ready() -> void:
 	BallInput.meshy_event.connect(_on_meshy_event)
 	_load_prompt()
 	_load_cached_model()
+	BallInput.send_command({"cmd": "preview", "on": true})
 
 func _process(delta: float) -> void:
 	_holder.rotate_y(0.6 * delta)
 
 func _exit_tree() -> void:
+	BallInput.send_command({"cmd": "preview", "on": false})
 	_save_prompt()
 
 # -- UI helpers -----------------------------------------------------------
@@ -138,6 +159,13 @@ func _button(text: String, on_pressed: Callable) -> Button:
 func _on_capture() -> void:
 	BallInput.send_command({"cmd": "capture"})
 
+func _on_add_file() -> void:
+	_file_dialog.popup_centered_ratio(0.7)
+
+func _on_files_selected(paths: PackedStringArray) -> void:
+	for path in paths:
+		BallInput.send_command({"cmd": "add_file", "path": path})
+
 func _on_clear() -> void:
 	BallInput.send_command({"cmd": "clear"})
 
@@ -155,6 +183,8 @@ func _on_load_latest() -> void:
 
 func _on_meshy_event(data: Dictionary) -> void:
 	match str(data.get("event", "")):
+		"frame":
+			_show_preview_frame(str(data.get("jpg", "")))
 		"photos":
 			_photos_label.text = "写真 %d / 4" % int(data.get("count", 0))
 		"status":
@@ -174,6 +204,14 @@ func _on_meshy_event(data: Dictionary) -> void:
 		"error":
 			var code := str(data.get("code", ""))
 			_status.text = ERROR_TEXT.get(code, "エラー: %s" % str(data.get("message", "")))
+
+func _show_preview_frame(jpg_base64: String) -> void:
+	if jpg_base64.is_empty():
+		return
+	var bytes := Marshalls.base64_to_raw(jpg_base64)
+	var img := Image.new()
+	if img.load_jpg_from_buffer(bytes) == OK:
+		_viewfinder.texture = ImageTexture.create_from_image(img)
 
 # -- model download + display ---------------------------------------------
 

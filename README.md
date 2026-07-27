@@ -142,11 +142,12 @@ One-time setup: get an API key from
 Then, with the camera tool running (`detect`), pick **Model Studio** in
 the game menu:
 
-1. Stand in front of the camera and click **Take photo** for 1–4 angles
-   (front / side / back work best). Photos are also saved to `photos/`
-   next to the tool so you can check them.
-2. Edit the **texture prompt** to steer how the model looks (saved
-   between sessions).
+1. A live camera viewfinder shows in the game. Stand in front of the
+   camera and click 「撮影」 for 1–4 angles (front / side / back work
+   best), or add existing image files with 「ファイル追加」. Photos are
+   also saved to `photos/` next to the tool.
+2. Edit the **texture prompt** in the game at any time (saved between
+   sessions).
 3. Click **Generate 3D model** — the progress bar tracks Meshy in real
    time (model build, then automatic rigging; rigging needs a clear
    humanoid pose and falls back to the unrigged model if it fails).

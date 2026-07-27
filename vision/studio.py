@@ -15,6 +15,7 @@ Events emitted (JSON, sent to the game's port; all carry "type": "meshy"):
   {"event": "error", "message": "..."}
 """
 
+import base64
 import os
 import threading
 import time
@@ -26,6 +27,8 @@ from meshy import MeshyClient, MeshyError
 
 PHOTOS_DIR = os.path.join(HERE, "photos")
 POLL_SECONDS = 4.0
+PREVIEW_EVERY = 4      # stream every Nth camera frame while the viewfinder is on
+PREVIEW_WIDTH = 320    # preview jpeg width (must stay well under the UDP limit)
 
 
 class MeshyStudio:
@@ -39,7 +42,9 @@ class MeshyStudio:
         self.height_meters = meshy_cfg.get("height_meters", 1.7)
         self.emit = emit  # callable(dict) -> sends event to the game
         self.photos = []  # jpeg bytes, oldest first
+        self.preview_on = False
         self._busy = False
+        self._frame_count = 0
 
     # -- command entry point (called from the camera loop) -------------------
 
@@ -47,13 +52,31 @@ class MeshyStudio:
         name = cmd.get("cmd", "")
         if name == "capture":
             self._capture(frame)
+        elif name == "add_file":
+            self._add_file(str(cmd.get("path", "")))
         elif name == "clear":
             self.photos = []
             self._event("photos", count=0)
+        elif name == "preview":
+            self.preview_on = bool(cmd.get("on", False))
         elif name == "generate":
             self._start(self._generate, str(cmd.get("prompt", "")))
         elif name == "list":
             self._start(self._list_models)
+
+    def stream_frame(self, frame):
+        """Called with every camera frame; streams a small live preview to
+        the game's viewfinder while it is enabled."""
+        if not self.preview_on or frame is None:
+            return
+        self._frame_count += 1
+        if self._frame_count % PREVIEW_EVERY:
+            return
+        h, w = frame.shape[:2]
+        small = cv2.resize(frame, (PREVIEW_WIDTH, int(h * PREVIEW_WIDTH / float(w))))
+        ok, jpg = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if ok:
+            self._event("frame", jpg=base64.b64encode(jpg.tobytes()).decode("ascii"))
 
     # -- internals -----------------------------------------------------------
 
@@ -71,18 +94,31 @@ class MeshyStudio:
     def _capture(self, frame):
         if frame is None:
             return self._error("No camera frame available", "capture_failed")
-        if len(self.photos) >= self.MAX_PHOTOS:
-            return self._error("Already have %d photos - clear first" % self.MAX_PHOTOS,
-                               "photos_full")
         ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
         if not ok:
             return self._error("Could not encode photo", "capture_failed")
-        self.photos.append(jpeg.tobytes())
+        self._add_jpeg(jpeg.tobytes(), "captured")
+
+    def _add_file(self, path):
+        """Photo upload: the game sends a path picked in its file dialog."""
+        img = cv2.imread(path)
+        if img is None:
+            return self._error("Could not read image: %s" % path, "file_failed")
+        ok, jpeg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not ok:
+            return self._error("Could not convert image: %s" % path, "file_failed")
+        self._add_jpeg(jpeg.tobytes(), "added from " + path)
+
+    def _add_jpeg(self, jpeg_bytes, source):
+        if len(self.photos) >= self.MAX_PHOTOS:
+            return self._error("Already have %d photos - clear first" % self.MAX_PHOTOS,
+                               "photos_full")
+        self.photos.append(jpeg_bytes)
         os.makedirs(PHOTOS_DIR, exist_ok=True)
         path = os.path.join(PHOTOS_DIR, "photo_%d.jpg" % len(self.photos))
         with open(path, "wb") as f:
-            f.write(self.photos[-1])
-        print("STUDIO: photo %d/%d captured -> %s" % (len(self.photos), self.MAX_PHOTOS, path))
+            f.write(jpeg_bytes)
+        print("STUDIO: photo %d/%d %s -> %s" % (len(self.photos), self.MAX_PHOTOS, source, path))
         self._event("photos", count=len(self.photos))
 
     def _client(self):
