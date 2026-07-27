@@ -15,7 +15,7 @@ var _respawn_left := 0.0
 func _ready() -> void:
 	var ui := CanvasLayer.new()
 	_score_label = Label.new()
-	_score_label.text = "Score: 0"
+	_score_label.text = "スコア: 0"
 	_score_label.position = Vector2(20, 12)
 	_score_label.add_theme_font_size_override("font_size", 36)
 	ui.add_child(_score_label)
@@ -42,5 +42,5 @@ func _spawn_ball() -> void:
 
 func _on_ball_popped() -> void:
 	score += 1
-	_score_label.text = "Score: %d" % score
+	_score_label.text = "スコア: %d" % score
 	_respawn_left = RESPAWN_DELAY

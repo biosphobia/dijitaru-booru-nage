@@ -47,16 +47,16 @@ func _ready() -> void:
 	_menu.add_child(box)
 
 	var title := Label.new()
-	title.text = "Dijitaru Booru Nage"
+	title.text = "デジタルボール投げ"
 	title.add_theme_font_size_override("font_size", 52)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
 
-	box.add_child(_menu_button("Ball Game  (1)", func() -> void: _start_mode(BallGameScene)))
-	box.add_child(_menu_button("Model Studio  (2)", func() -> void: _start_mode(ModelStudioScene)))
+	box.add_child(_menu_button("ボールゲーム (1)", func() -> void: _start_mode(BallGameScene)))
+	box.add_child(_menu_button("モデルスタジオ (2)", func() -> void: _start_mode(ModelStudioScene)))
 
 	var hint := Label.new()
-	hint.text = "C = calibration    F = fullscreen    Esc = back / quit"
+	hint.text = "C: キャリブレーション　F: 全画面　Esc: 戻る"
 	hint.add_theme_font_size_override("font_size", 18)
 	hint.modulate = Color(1, 1, 1, 0.6)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

@@ -62,18 +62,21 @@ class MeshyStudio:
         payload.update(fields)
         self.emit(payload)
 
-    def _error(self, message):
+    def _error(self, message, code=""):
+        # "code" lets the game show a localized message; "message" is the
+        # English detail for the console and unrecognized errors.
         print("STUDIO ERROR:", message)
-        self._event("error", message=str(message))
+        self._event("error", message=str(message), code=code)
 
     def _capture(self, frame):
         if frame is None:
-            return self._error("No camera frame available")
+            return self._error("No camera frame available", "capture_failed")
         if len(self.photos) >= self.MAX_PHOTOS:
-            return self._error("Already have %d photos - clear first" % self.MAX_PHOTOS)
+            return self._error("Already have %d photos - clear first" % self.MAX_PHOTOS,
+                               "photos_full")
         ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
         if not ok:
-            return self._error("Could not encode photo")
+            return self._error("Could not encode photo", "capture_failed")
         self.photos.append(jpeg.tobytes())
         os.makedirs(PHOTOS_DIR, exist_ok=True)
         path = os.path.join(PHOTOS_DIR, "photo_%d.jpg" % len(self.photos))
@@ -84,13 +87,14 @@ class MeshyStudio:
 
     def _client(self):
         if not self.api_key:
-            self._error('No Meshy API key - set "meshy": {"api_key": "msy-..."} in config.json')
+            self._error('No Meshy API key - set "meshy": {"api_key": "msy-..."} in config.json',
+                        "no_key")
             return None
         return MeshyClient(self.api_key)
 
     def _start(self, target, *args):
         if self._busy:
-            return self._error("A Meshy task is already running")
+            return self._error("A Meshy task is already running", "busy")
         self._busy = True
         threading.Thread(target=self._run, args=(target,) + args, daemon=True).start()
 
@@ -123,7 +127,7 @@ class MeshyStudio:
         if client is None:
             return
         if not self.photos:
-            return self._error("No photos yet - capture 1-4 photos first")
+            return self._error("No photos yet - capture 1-4 photos first", "no_photos")
 
         self._event("status", stage="model", progress=0,
                     message="Uploading %d photo(s) to Meshy..." % len(self.photos))

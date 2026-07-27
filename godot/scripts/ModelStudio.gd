@@ -11,7 +11,21 @@ extends Node
 
 const CFG_PATH := "user://studio.cfg"
 const CACHE_PATH := "user://latest_model.glb"
-const DEFAULT_PROMPT := "a game character, colorful, friendly"
+const DEFAULT_PROMPT := "ゲームキャラクター、カラフル"
+
+## Japanese text for error codes sent by vision/studio.py.
+const ERROR_TEXT := {
+	"no_key": "APIキー未設定（config.json）",
+	"no_photos": "写真がありません",
+	"busy": "処理中です",
+	"capture_failed": "撮影失敗",
+	"photos_full": "写真は4枚まで（クリアしてください）",
+}
+const STAGE_TEXT := {
+	"model": "3Dモデル生成中",
+	"rig": "リギング中",
+	"list": "読込中",
+}
 
 var _prompt: LineEdit
 var _photos_label: Label
@@ -36,26 +50,25 @@ func _ready() -> void:
 	panel.add_theme_constant_override("separation", 12)
 	root.add_child(panel)
 
-	panel.add_child(_label("Model Studio", 34))
-	panel.add_child(_label("1. Stand in front of the camera,\n    take 1-4 photos from different angles", 17))
+	panel.add_child(_label("モデルスタジオ", 34))
 
-	_photos_label = _label("Photos: 0 / 4", 22)
+	_photos_label = _label("写真 0 / 4", 22)
 	panel.add_child(_photos_label)
 
 	var photo_row := HBoxContainer.new()
 	photo_row.add_theme_constant_override("separation", 10)
-	photo_row.add_child(_button("Take photo", _on_capture))
-	photo_row.add_child(_button("Clear", _on_clear))
+	photo_row.add_child(_button("撮影", _on_capture))
+	photo_row.add_child(_button("クリア", _on_clear))
 	panel.add_child(photo_row)
 
-	panel.add_child(_label("2. Texture prompt (how the model should look):", 17))
 	_prompt = LineEdit.new()
 	_prompt.text = DEFAULT_PROMPT
+	_prompt.placeholder_text = "テクスチャプロンプト"
 	_prompt.custom_minimum_size = Vector2(0, 40)
 	panel.add_child(_prompt)
 
-	panel.add_child(_button("Generate 3D model", _on_generate))
-	panel.add_child(_button("Load newest from Meshy cloud", _on_load_latest))
+	panel.add_child(_button("3Dモデル生成", _on_generate))
+	panel.add_child(_button("クラウドから読込", _on_load_latest))
 
 	_progress = ProgressBar.new()
 	_progress.min_value = 0
@@ -63,7 +76,7 @@ func _ready() -> void:
 	_progress.custom_minimum_size = Vector2(0, 26)
 	panel.add_child(_progress)
 
-	_status = _label("Idle. The camera tool (BooruVision detect) must be running.", 16)
+	_status = _label("待機中", 16)
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	panel.add_child(_status)
 
@@ -131,11 +144,11 @@ func _on_clear() -> void:
 func _on_generate() -> void:
 	_save_prompt()
 	_progress.value = 0
-	_status.text = "Sending photos to Meshy..."
+	_status.text = "送信中…"
 	BallInput.send_command({"cmd": "generate", "prompt": _prompt.text})
 
 func _on_load_latest() -> void:
-	_status.text = "Asking Meshy for your saved models..."
+	_status.text = "読込中…"
 	BallInput.send_command({"cmd": "list"})
 
 # -- events back from the vision tool -------------------------------------
@@ -143,21 +156,24 @@ func _on_load_latest() -> void:
 func _on_meshy_event(data: Dictionary) -> void:
 	match str(data.get("event", "")):
 		"photos":
-			_photos_label.text = "Photos: %d / 4" % int(data.get("count", 0))
+			_photos_label.text = "写真 %d / 4" % int(data.get("count", 0))
 		"status":
-			_status.text = str(data.get("message", ""))
-			_progress.value = float(data.get("progress", 0))
+			var stage := str(data.get("stage", ""))
+			var progress := int(data.get("progress", 0))
+			_status.text = "%s… %d%%" % [STAGE_TEXT.get(stage, stage), progress]
+			_progress.value = progress
 		"model_ready":
 			_progress.value = 100
 			_download(str(data.get("model_url", "")))
 		"models":
 			var items: Array = data.get("items", [])
 			if items.is_empty():
-				_status.text = "No finished models in your Meshy account yet."
+				_status.text = "保存済みモデルなし"
 			else:
 				_download(str(items[0].get("model_url", "")))
 		"error":
-			_status.text = "Error: %s" % str(data.get("message", ""))
+			var code := str(data.get("code", ""))
+			_status.text = ERROR_TEXT.get(code, "エラー: %s" % str(data.get("message", "")))
 
 # -- model download + display ---------------------------------------------
 
@@ -165,25 +181,25 @@ func _download(url: String) -> void:
 	if url.is_empty() or _downloading:
 		return
 	_downloading = true
-	_status.text = "Downloading model..."
+	_status.text = "ダウンロード中…"
 	var err := _http.request(url)
 	if err != OK:
 		_downloading = false
-		_status.text = "Download failed to start (error %d)" % err
+		_status.text = "ダウンロード失敗（%d）" % err
 
 func _on_download_done(_result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	_downloading = false
 	if code != 200 or body.is_empty():
-		_status.text = "Model download failed (HTTP %d)" % code
+		_status.text = "ダウンロード失敗（HTTP %d）" % code
 		return
 	var file := FileAccess.open(CACHE_PATH, FileAccess.WRITE)
 	if file:
 		file.store_buffer(body)
 		file.close()
 	if _show_glb(body):
-		_status.text = "Model ready! It stays in your Meshy cloud account."
+		_status.text = "完了"
 	else:
-		_status.text = "Downloaded, but the model could not be displayed."
+		_status.text = "モデルを表示できません"
 
 func _show_glb(bytes: PackedByteArray) -> bool:
 	var doc := GLTFDocument.new()
@@ -203,7 +219,7 @@ func _load_cached_model() -> void:
 		return
 	var bytes := FileAccess.get_file_as_bytes(CACHE_PATH)
 	if not bytes.is_empty() and _show_glb(bytes):
-		_status.text = "Showing your last model (cached). Take photos to make a new one!"
+		_status.text = "前回のモデル"
 
 # -- prompt persistence ----------------------------------------------------
 
