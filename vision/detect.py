@@ -55,28 +55,99 @@ class Track:
         self.last_seen = frame_idx
 
 
-def consistent_direction(steps, min_speed, straight_cos, speed_ratio=3.0):
-    """If every step is fast, aligned with the mean direction, and of
-    similar length, return the mean direction (unit vector); else None.
-    A real thrown ball moves fast, straight, and at near-constant speed -
-    sensor grain and chained flicker artifacts do none of that."""
+def consistent_direction(steps, min_speed, straight_cos, adj_ratio=2.2):
+    """If the steps look like a real ball in flight, return the mean
+    direction (unit vector) and mean speed; else (None, reason).
+
+    A real thrown ball moves fast, straight, and with smoothly changing
+    speed (perspective makes it decelerate/accelerate gradually) - sensor
+    grain and chained flicker artifacts do none of that. Speeds are
+    compared between ADJACENT steps so foreshortening is tolerated."""
     units, speeds = [], []
     for s in steps:
         n = np.hypot(s[0], s[1])
-        if n < min_speed:
-            return None
+        if n < max(2.0, min_speed * 0.5):
+            return None, 0.0, "approach step too slow (%.1f px/frame)" % n
         units.append(s / n)
         speeds.append(n)
-    if max(speeds) > speed_ratio * min(speeds):
-        return None
+    if float(np.mean(speeds)) < min_speed:
+        return None, 0.0, "approach too slow on average (%.1f px/frame)" % np.mean(speeds)
+    for a, b in zip(speeds, speeds[1:]):
+        if max(a, b) > adj_ratio * min(a, b):
+            return None, 0.0, "speed jump %.1fx between steps" % (max(a, b) / min(a, b))
     mean = np.sum(units, axis=0)
     norm = np.hypot(mean[0], mean[1])
     if norm < 1e-9:
-        return None
+        return None, 0.0, "no consistent direction"
     mean /= norm
-    if any(float(u @ mean) < straight_cos for u in units):
-        return None
-    return mean
+    worst = min(float(u @ mean) for u in units)
+    if worst < straight_cos:
+        return None, 0.0, "approach not straight (%.0f deg wobble)" % np.degrees(np.arccos(max(-1.0, worst)))
+    return mean, float(np.mean(speeds)), ""
+
+
+# ordering of gate stages, used to report the deepest failure of a track
+_STAGE_NAMES = ["short", "gap", "approach", "hover", "recede", "side", "turn"]
+
+
+def evaluate_contact(p, f, radii, cfg):
+    """Check a track's history for the wall-contact signature.
+
+    p: positions (np arrays), f: frame indices, radii: blob radii.
+    cfg: dict with approach, min_speed, straight_cos, hover_max, min_cos,
+    side_cos, lag.
+    Returns (hit, reason): hit = (pos, radius, frames_back) or None;
+    reason = human-readable deepest gate failure among candidate windows.
+    """
+    n = len(p)
+    best_stage, best_reason = -1, "track too short (%d observations)" % n
+    for e in range(n - 3, n - 4 - cfg["hover_max"], -1):
+        if e < cfg["approach"]:
+            break
+
+        def fail(stage, reason):
+            nonlocal best_stage, best_reason
+            idx = _STAGE_NAMES.index(stage)
+            if idx > best_stage:
+                best_stage, best_reason = idx, reason
+
+        # approach must be a near-gap-free frame run (one miss allowed)
+        if f[e] - f[e - cfg["approach"]] > cfg["approach"] + 1:
+            fail("gap", "approach had missed frames")
+            continue
+        if f[-1] - f[e] > (n - 1 - e) + 1:
+            fail("gap", "bounce-out had missed frames")
+            continue
+        steps = [p[i + 1] - p[i] for i in range(e - cfg["approach"], e)]
+        incoming, speed, why = consistent_direction(
+            steps, cfg["min_speed"], cfg["straight_cos"])
+        if incoming is None:
+            fail("approach", why)
+            continue
+        hover = [p[i] for i in range(e + 1, n - 2)]
+        hover_limit = max(10.0, speed * 1.2)
+        if any(np.hypot(*(q - p[e])) > hover_limit for q in hover):
+            fail("hover", "did not stay near the turn point")
+            continue
+        v_a = p[-2] - p[e]
+        v_b = p[-1] - p[e]
+        n_a = np.hypot(v_a[0], v_a[1])
+        n_b = np.hypot(v_b[0], v_b[1])
+        if n_a < 1.5 or n_b <= n_a:
+            fail("recede", "did not recede over two frames after the turn")
+            continue
+        # both post-turn observations must lie on the turned side
+        if float(v_a @ incoming) / n_a > cfg["side_cos"]:
+            fail("side", "first post-turn frame still on the approach side")
+            continue
+        cos_turn = float(v_b @ incoming) / n_b
+        if cos_turn > cfg["min_cos"]:
+            fail("turn", "turn only %.0f deg" % np.degrees(np.arccos(min(1.0, cos_turn))))
+            continue
+        cluster = np.mean([p[e]] + hover, axis=0)
+        hit_pos = cluster + incoming * (speed * cfg["lag"])
+        return (hit_pos, radii[e], n - 1 - e), ""
+    return None, best_reason
 
 
 def classify_color(frame_bgr, pos, radius, color_defs):
@@ -160,6 +231,15 @@ def main():
     # motion-diff centroids trail the ball by ~half a streak; nudge the
     # contact estimate forward along the approach by this * approach speed
     lag_correction = det.get("lag_correction", 0.5)
+    contact_cfg = {
+        "approach": approach_frames,
+        "min_speed": min_speed,
+        "straight_cos": straight_cos,
+        "hover_max": hover_max,
+        "min_cos": min_cos,
+        "side_cos": float(np.cos(np.radians(0.6 * min_turn_deg))),
+        "lag": lag_correction,
+    }
     base_threshold = det.get("diff_threshold", 25)
     auto_threshold = det.get("auto_threshold", True)
     noise_multiplier = det.get("noise_multiplier", 6.0)
@@ -278,7 +358,23 @@ def main():
                 unmatched.remove(best)
         for i in unmatched:
             tracks.append(Track(detections[i][0], detections[i][1], frame_idx))
-        tracks = [t for t in tracks if frame_idx - t.last_seen <= track_timeout]
+
+        # retire stale tracks; print a post-mortem for any that looked like
+        # a real throw but never fired, saying which gate rejected it
+        alive = []
+        for t in tracks:
+            if frame_idx - t.last_seen <= track_timeout:
+                alive.append(t)
+                continue
+            if not t.hit_fired and len(t.positions) >= approach_frames + 3:
+                tp = [np.array(q, dtype=np.float64) for q in t.positions]
+                speeds = [np.hypot(*(tp[i + 1] - tp[i])) for i in range(len(tp) - 1)]
+                if max(speeds) >= min_speed:
+                    _, reason = evaluate_contact(
+                        tp, list(t.frames), list(t.radii), contact_cfg)
+                    print("MISS track#%d len=%d vmax=%.0f end=(%.0f,%.0f): %s"
+                          % (t.id, len(tp), max(speeds), tp[-1][0], tp[-1][1], reason))
+        tracks = alive
 
         # --- hit detection ----------------------------------------------
         for track in tracks:
@@ -290,57 +386,19 @@ def main():
             hit_span = 0  # how many frames ago the contact frame was
             if mode == "instant" and len(p) >= 3:
                 steps = [p[-2] - p[-3], p[-1] - p[-2]]
-                if consistent_direction(steps, min_speed, straight_cos) is not None:
+                direction, _, _ = consistent_direction(steps, min_speed, straight_cos)
+                if direction is not None:
                     hit_pos = p[-1]
                     hit_radius = track.radii[-1]
             elif mode == "reversal":
-                # Wall contact has a fixed physical shape:
-                #   1. consistent straight fast APPROACH (a real thrown
-                #      ball; grain and flicker cannot fake one)
-                #   2. optional short HOVER: observations clustered at the
-                #      contact point (the streak folds onto itself)
-                #   3. RECEDE: two consecutive observations moving away,
-                #      turned >= min_turn_deg from the approach (a clean
-                #      bounce ~180 deg, a dead drop down the wall ~90 deg).
-                #      A one-frame light artifact can never recede twice.
-                f = list(track.frames)
-                n = len(p)
-                for e in range(n - 3, n - 4 - hover_max, -1):
-                    if e < approach_frames:
-                        break
-                    # approach must be a gap-free frame run - a fast ball is
-                    # detected every frame at 60 fps, chained noise is not;
-                    # hover/recede may miss a couple (impact diff is small)
-                    if f[e] - f[e - approach_frames] != approach_frames:
-                        continue
-                    if f[-1] - f[e] > (n - 1 - e) + 1:
-                        continue
-                    steps = [p[i + 1] - p[i]
-                             for i in range(e - approach_frames, e)]
-                    incoming = consistent_direction(steps, min_speed, straight_cos)
-                    if incoming is None:
-                        continue
-                    speed = float(np.mean([np.hypot(s[0], s[1]) for s in steps]))
-                    hover = [p[i] for i in range(e + 1, n - 2)]
-                    if any(np.hypot(*(q - p[e])) > speed * 1.2 for q in hover):
-                        continue
-                    v_a = p[-2] - p[e]
-                    v_b = p[-1] - p[e]
-                    n_a = np.hypot(v_a[0], v_a[1])
-                    n_b = np.hypot(v_b[0], v_b[1])
-                    if n_a < 2.0 or n_b <= n_a:
-                        continue  # not receding over both post-turn frames
-                    # both post-turn observations must lie on the turned side
-                    if float(v_a @ incoming) / n_a > np.cos(np.radians(0.6 * min_turn_deg)):
-                        continue
-                    if float(v_b @ incoming) / n_b <= min_cos:
-                        # contact = the hover cluster, nudged forward by the
-                        # half-streak lag of motion-diff centroids
-                        cluster = np.mean([p[e]] + hover, axis=0)
-                        hit_pos = cluster + incoming * (speed * lag_correction)
-                        hit_radius = track.radii[e]
-                        hit_span = n - 1 - e
-                        break
+                # Wall contact has a fixed physical shape: a consistent
+                # straight fast APPROACH, an optional short HOVER cluster at
+                # the contact point, then RECEDING observations turned by
+                # >= min_turn_deg. See evaluate_contact.
+                hit, _ = evaluate_contact(
+                    p, list(track.frames), list(track.radii), contact_cfg)
+                if hit is not None:
+                    hit_pos, hit_radius, hit_span = hit
             if hit_pos is None:
                 continue
             track.hit_fired = True
