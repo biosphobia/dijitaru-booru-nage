@@ -237,6 +237,22 @@ The ones worth knowing on the day:
 `waves.cross_time_start`. **Paying out too much candy?** Lower
 `coins.multiplier` — it scales kills and bonuses together.
 
+### What a run looks like
+
+Measured against a simulated player throwing every 2.4 s with realistic aim
+error, on the shipped defaults:
+
+| wave | 1–5 | 6 | 7 | 8 |
+| --- | --- | --- | --- | --- |
+| hull left (of 5) | 5 | 3 | 2 | 2 |
+| coins | 49 | 79 | 118 | 118+ |
+
+So: nothing gets through for the first five waves, the pressure starts at
+wave 6, and a run ends around wave 9 — about 3½ minutes, ~130 coins. A
+first-timer throwing more slowly will end around wave 5–6 with 40–60.
+Pick the prize exchange rate from that, and use `coins.multiplier` to move
+every payout at once rather than editing each alien.
+
 ## Model Studio (Meshy.ai)
 
 One-time setup: get an API key from

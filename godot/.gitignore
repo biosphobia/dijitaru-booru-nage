@@ -1,5 +1,8 @@
 .godot/
 *.tmp
+# Godot regenerates these on import (CI runs --import before exporting)
+*.import
+*.uid
 # CameraServerExtension is fetched by CI (and installed manually for local
 # Windows/Linux editor use) - not vendored
 addons/
