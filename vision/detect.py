@@ -21,6 +21,7 @@ Preview window keys:  Q = quit   M = toggle motion-mask view
 
 import json
 import socket
+import sys
 import time
 from collections import deque
 
@@ -101,6 +102,57 @@ def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9,
             return None, 0.0, "approach not straight (%.0f deg wobble)" \
                 % np.degrees(np.arccos(max(-1.0, worst)))
     return mean, float(np.mean(speeds)), ""
+
+
+def associate(tracks, detections, frame_idx, max_match_dist):
+    """Match detections to tracks; returns {track_index: detection_index}.
+
+    Globally greedy by distance-to-prediction, in TWO passes: tracks with
+    a real velocity estimate (>= 2 observations) bid first, then newborn
+    single-observation tracks compete for the leftovers. Both properties
+    matter: global order stops the ball and its projector-shadow chains
+    from stealing each other's blobs (they fly a few px apart), and the
+    established-first pass stops a fresh junk blob born next to the
+    ball's path from outbidding the ball's own track and fragmenting it.
+    """
+    assigned = {}
+    matched_d = set()
+    for established in (True, False):
+        pairs = []
+        for ti, track in enumerate(tracks):
+            if ti in assigned or (len(track.positions) >= 2) != established:
+                continue
+            if established:
+                lx, ly = track.positions[-1]
+                qx, qy = track.positions[-2]
+                step = max(1, track.frames[-1] - track.frames[-2])
+                vx, vy = (lx - qx) / step, (ly - qy) / step
+                # predict across the REAL frame gap: after a detection
+                # dropout the ball is several steps ahead, and predicting
+                # only one step used to break the track (losing the whole
+                # approach history right before the hit)
+                gap = frame_idx - track.frames[-1]
+                pred = (lx + vx * gap, ly + vy * gap)
+                last_speed = np.hypot(vx, vy)
+                allowed = min(max_match_dist,
+                              max(15.0, 12.0 + 2.5 * last_speed))
+            else:
+                pred = track.positions[-1]
+                allowed = max_match_dist
+            for i in range(len(detections)):
+                if i in matched_d:
+                    continue
+                d = np.hypot(detections[i][0][0] - pred[0],
+                             detections[i][0][1] - pred[1])
+                if d < allowed:
+                    pairs.append((d, ti, i))
+        pairs.sort(key=lambda q: q[0])
+        for d, ti, i in pairs:
+            if ti in assigned or i in matched_d:
+                continue
+            assigned[ti] = i
+            matched_d.add(i)
+    return assigned
 
 
 # ordering of gate stages, used to report the deepest failure of a track
@@ -303,7 +355,26 @@ def classify_color(frame_bgr, pos, radius, color_defs):
     return "unknown"
 
 
+def _disable_quickedit():
+    """Windows console 'QuickEdit' pauses the whole process when the user
+    clicks inside the window - the tracker silently freezes mid-game.
+    Turn it off for this console."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+            # clear ENABLE_QUICK_EDIT_MODE (0x40); 0x80 = ENABLE_EXTENDED_FLAGS
+            k32.SetConsoleMode(handle, (mode.value & ~0x40) | 0x80)
+    except Exception:
+        pass
+
+
 def main():
+    _disable_quickedit()
     config = load_config()
     # Calibration is only needed to map ball hits to game coordinates.
     # The camera, the Model Studio and the live viewfinder must work
@@ -398,6 +469,7 @@ def main():
 
     prev_gray = None
     tracks = []
+    noise_sample_mask = None  # pixels used to estimate sensor grain
     recent_hits = []  # (time, normalized_pos)
     recent_hits_s = []  # (time, screen pos) - twin/debris suppression
     recent_frames = deque(maxlen=4)  # small color frames, for sampling pre-impact color
@@ -463,9 +535,20 @@ def main():
         prev_gray = gray
         thr = float(base_threshold)
         if auto_threshold:
-            # most pixels are static, so the median absolute difference is
-            # the sensor grain level - float the threshold above it
-            thr = max(thr, noise_multiplier * float(np.median(diff[::4, ::4])))
+            # The grain estimate must come from pixels OUTSIDE the game
+            # projection: when the projected content animates, a whole-frame
+            # median explodes and the floating threshold blinds the tracker
+            # to the real ball (throws silently produce nothing at all).
+            if noise_sample_mask is None:
+                m = np.ones(gray.shape, np.uint8)
+                cv2.fillPoly(m, [game_poly], 0)
+                sub = m[::4, ::4].astype(bool)
+                # too little room visible around the projection -> whole frame
+                noise_sample_mask = sub if int(sub.sum()) >= 1500 else sub | True
+            sample = diff[::4, ::4][noise_sample_mask]
+            # most sampled pixels are static, so the median absolute
+            # difference is the sensor grain level - float above it
+            thr = max(thr, noise_multiplier * float(np.median(sample)))
         _, mask = cv2.threshold(diff, thr, 255, cv2.THRESH_BINARY)
         # opening erases isolated grain specks; the dilation afterwards
         # reconnects the ball's motion-blur streak
@@ -505,43 +588,11 @@ def main():
         # bounce; the duplicate hit is absorbed by the cooldown.)
         # The match radius scales with the track's own speed: a slow track
         # cannot teleport onto an unrelated blob across the frame.
-        # Match globally by distance-to-prediction: the ball and its
-        # projector SHADOW fly as two parallel blob chains a few px apart,
-        # and per-track greedy matching let one chain steal the other's
-        # blob (zigzag tracks with corrupted geometry). With all candidate
-        # pairs sorted, each chain keeps its own continuation.
-        pairs = []
-        for ti, track in enumerate(tracks):
-            if len(track.positions) >= 2:
-                lx, ly = track.positions[-1]
-                qx, qy = track.positions[-2]
-                step = max(1, track.frames[-1] - track.frames[-2])
-                vx, vy = (lx - qx) / step, (ly - qy) / step
-                # predict across the REAL frame gap: after a detection
-                # dropout the ball is several steps ahead, and predicting
-                # only one step used to break the track (losing the whole
-                # approach history right before the hit)
-                gap = frame_idx - track.frames[-1]
-                pred = (lx + vx * gap, ly + vy * gap)
-                last_speed = np.hypot(vx, vy)
-                allowed = min(max_match_dist, max(15.0, 12.0 + 2.5 * last_speed))
-            else:
-                pred = track.positions[-1]
-                allowed = max_match_dist
-            for i in range(len(detections)):
-                d = np.hypot(detections[i][0][0] - pred[0],
-                             detections[i][0][1] - pred[1])
-                if d < allowed:
-                    pairs.append((d, ti, i))
-        pairs.sort(key=lambda q: q[0])
-        matched_t, matched_d = set(), set()
-        for d, ti, i in pairs:
-            if ti in matched_t or i in matched_d:
-                continue
+        assigned = associate(tracks, detections, frame_idx, max_match_dist)
+        for ti, i in assigned.items():
             tracks[ti].add(detections[i][0], spts[i],
                            detections[i][1], frame_idx)
-            matched_t.add(ti)
-            matched_d.add(i)
+        matched_d = set(assigned.values())
         for i in range(len(detections)):
             if i not in matched_d:
                 tracks.append(Track(detections[i][0], spts[i],
@@ -554,7 +605,7 @@ def main():
             if frame_idx - t.last_seen <= track_timeout:
                 alive.append(t)
                 continue
-            if not t.hit_fired and len(t.positions) >= approach_frames + 3:
+            if not t.hit_fired and len(t.positions) >= 5:
                 ts = list(t.spos)
                 sspeeds = [np.hypot(*(ts[i + 1] - ts[i])) for i in range(len(ts) - 1)]
                 if max(sspeeds) >= min_speed:
@@ -682,15 +733,20 @@ def main():
 
             hit_s = np.array(hit_s, dtype=np.float64)
             now = time.monotonic()
+            # Every suppressed hit is PRINTED: a silent swallow here looks
+            # exactly like a missed throw in the field, which is undebuggable.
             # the streak's twin diff chain sees the same impact a beat later
             # with a slightly different contact estimate - one physical hit
             if any(now - t < 0.4 and float(np.hypot(*(hit_s - q))) < 0.18
                    for t, q in recent_hits_s):
+                print("DUP  twin-chain duplicate of a just-sent hit, merged")
                 continue
             # back to plain normalized game coordinates
             norm = np.array([hit_s[0] / screen_aspect, hit_s[1]])
             if not (-0.02 <= norm[0] <= 1.02 and -0.02 <= norm[1] <= 1.02):
-                continue  # outside the projected game area
+                print("DROP hit outside the game area (%.3f, %.3f)"
+                      % (norm[0], norm[1]))
+                continue
             norm = np.clip(norm, 0.0, 1.0)
 
             # cooldown: ignore near-duplicate hits (double bounces etc.)
@@ -699,6 +755,8 @@ def main():
             ]
             if any(np.hypot(norm[0] - pos[0], norm[1] - pos[1]) < cooldown_radius
                    for _, pos in recent_hits):
+                print("DROP hit at (%.3f, %.3f) within cooldown of a recent hit"
+                      % (norm[0], norm[1]))
                 continue
             recent_hits.append((now, (float(norm[0]), float(norm[1]))))
 
