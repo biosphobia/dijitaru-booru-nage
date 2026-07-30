@@ -45,6 +45,7 @@ DEFAULT_CONFIG = {
         "max_area": 2500,
         "min_speed_norm": 0.012,
         "screen_aspect": 1.778,
+        "screen_height_m": 2.0,
         "min_turn_deg": 45.0,
         "approach_frames": 4,
         "straightness_deg": 45.0,
