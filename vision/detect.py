@@ -56,16 +56,16 @@ class Track:
         self.last_seen = frame_idx
 
 
-def consistent_direction(steps, min_speed, straight_cos, adj_ratio=1.7):
-    """If the steps look like a real ball in flight, return the mean
-    direction (unit vector) and mean speed; else (None, reason).
+def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9):
+    """If the per-frame velocities look like a real ball in flight, return
+    the mean direction (unit vector) and mean speed; else (None, reason).
 
     A real thrown ball moves fast, straight, and with smoothly changing
     speed (perspective makes it decelerate/accelerate gradually) - sensor
     grain and chained flicker artifacts do none of that. Speeds are
     compared between ADJACENT steps so foreshortening is tolerated."""
     units, speeds = [], []
-    for s in steps:
+    for s in velocities:
         n = np.hypot(s[0], s[1])
         if n < max(2.0, min_speed * 0.5):
             return None, 0.0, "approach step too slow (%.1f px/frame)" % n
@@ -112,16 +112,18 @@ def evaluate_contact(p, f, radii, cfg):
             if idx > best_stage:
                 best_stage, best_reason = idx, reason
 
-        # approach must be a near-gap-free frame run (one miss allowed)
-        if f[e] - f[e - cfg["approach"]] > cfg["approach"] + 1:
+        # approach must be a near-gap-free frame run (two misses allowed;
+        # velocities below are per-frame, so gaps do not distort speeds)
+        if f[e] - f[e - cfg["approach"]] > cfg["approach"] + 2:
             fail("gap", "approach had missed frames")
             continue
-        if f[-1] - f[e] > (n - 1 - e) + 1:
+        if f[-1] - f[e] > (n - 1 - e) + 2:
             fail("gap", "bounce-out had missed frames")
             continue
-        steps = [p[i + 1] - p[i] for i in range(e - cfg["approach"], e)]
+        vels = [(p[i + 1] - p[i]) / max(1, f[i + 1] - f[i])
+                for i in range(e - cfg["approach"], e)]
         incoming, speed, why = consistent_direction(
-            steps, cfg["min_speed"], cfg["straight_cos"])
+            vels, cfg["min_speed"], cfg["straight_cos"])
         if incoming is None:
             fail("approach", why)
             continue
@@ -146,9 +148,9 @@ def evaluate_contact(p, f, radii, cfg):
         # half the last approach step is a real kink.
         cos_turn = float(v_b @ incoming) / n_b
         turned = cos_turn <= cfg["min_cos"]
-        out_speed = float(np.hypot(*(p[-1] - p[-2])))
-        last_in = float(np.hypot(*(p[e] - p[e - 1])))
-        collapsed = out_speed < 0.5 * last_in
+        out_speed = float(np.hypot(*(p[-1] - p[-2]))) / max(1, f[-1] - f[-2])
+        last_in = float(np.hypot(*(p[e] - p[e - 1]))) / max(1, f[e] - f[e - 1])
+        collapsed = out_speed < 0.52 * last_in
         if not (turned or collapsed):
             fail("turn", "no bounce kink (turn %.0f deg, kept %.0f%% speed)"
                  % (np.degrees(np.arccos(np.clip(cos_turn, -1.0, 1.0))),
@@ -358,15 +360,21 @@ def main():
         # trailing diff blobs form separate stable chains instead of
         # cross-stealing each other's detections. (Both chains see the
         # bounce; the duplicate hit is absorbed by the cooldown.)
+        # The match radius scales with the track's own speed: a slow track
+        # cannot teleport onto an unrelated blob across the frame.
         unmatched = list(range(len(detections)))
         for track in tracks:
             if len(track.positions) >= 2:
                 lx, ly = track.positions[-1]
                 qx, qy = track.positions[-2]
                 pred = (2.0 * lx - qx, 2.0 * ly - qy)
+                last_speed = np.hypot(lx - qx, ly - qy) \
+                    / max(1, track.frames[-1] - track.frames[-2])
+                allowed = min(max_match_dist, max(15.0, 12.0 + 2.5 * last_speed))
             else:
                 pred = track.positions[-1]
-            best, best_d = None, max_match_dist
+                allowed = max_match_dist
+            best, best_d = None, allowed
             for i in unmatched:
                 d = np.hypot(detections[i][0][0] - pred[0],
                              detections[i][0][1] - pred[1])
@@ -408,8 +416,10 @@ def main():
             hit_radius = 0.0
             hit_span = 0  # how many frames ago the contact frame was
             if silence == 0 and mode == "instant" and len(p) >= 3:
-                steps = [p[-2] - p[-3], p[-1] - p[-2]]
-                direction, _, _ = consistent_direction(steps, min_speed, straight_cos)
+                tf = list(track.frames)
+                vels = [(p[-2] - p[-3]) / max(1, tf[-2] - tf[-3]),
+                        (p[-1] - p[-2]) / max(1, tf[-1] - tf[-2])]
+                direction, _, _ = consistent_direction(vels, min_speed, straight_cos)
                 if direction is not None:
                     hit_pos = p[-1]
                     hit_radius = track.radii[-1]
@@ -430,22 +440,30 @@ def main():
                 # approach ending at the final observation, away from the
                 # camera edges (an exiting ball dies at the border).
                 f = list(track.frames)
-                if f[-1] - f[-1 - vanish_approach] <= vanish_approach + 1:
-                    steps = [p[i + 1] - p[i]
-                             for i in range(len(p) - 1 - vanish_approach, len(p) - 1)]
+                if f[-1] - f[-1 - vanish_approach] <= vanish_approach + 2:
+                    vels = [(p[i + 1] - p[i]) / max(1, f[i + 1] - f[i])
+                            for i in range(len(p) - 1 - vanish_approach, len(p) - 1)]
                     incoming, speed, _ = consistent_direction(
-                        steps, min_speed, straight_cos)
+                        vels, min_speed, straight_cos)
                     x, y = p[-1]
                     inside = (edge_margin < x < small.shape[1] - edge_margin
                               and edge_margin < y < small.shape[0] - edge_margin)
-                    # motion whose approach STARTED near a recent hit is the
-                    # OUTGOING ball - its later fade is not a new impact
+                    # motion flying AWAY from a recent hit (the hit lies
+                    # behind it along its own flight line) is the OUTGOING ball -
+                    # its later fade is not a new impact. A fresh throw at
+                    # the same spot has the old hit AHEAD, not behind.
                     now_t = time.monotonic()
-                    start = p[-1 - vanish_approach]
-                    debris = any(
-                        now_t - t_hit < 1.5
-                        and np.hypot(start[0] - hp[0], start[1] - hp[1]) < 80.0
-                        for t_hit, hp in recent_hits_cam)
+                    debris = False
+                    if incoming is not None:
+                        for t_hit, hp in recent_hits_cam:
+                            if now_t - t_hit >= 1.5:
+                                continue
+                            d = np.array(hp, dtype=np.float64) - p[-1]
+                            along = float(d @ incoming)
+                            perp = float(np.hypot(*(d - along * incoming)))
+                            if along < 10.0 and perp < 50.0:
+                                debris = True
+                                break
                     # if another live track continues the flight ahead along
                     # the same line, the ball did not hit anything - the
                     # tracker just hiccuped and re-acquired it
@@ -467,6 +485,13 @@ def main():
             if hit_pos is None:
                 continue
             track.hit_fired = True
+            # the streak's twin diff chain sees the same impact a beat later
+            # with a slightly different contact estimate - one physical hit
+            now_c = time.monotonic()
+            if any(now_c - t < 0.4
+                   and np.hypot(hit_pos[0] - q[0], hit_pos[1] - q[1]) < 100.0
+                   for t, q in recent_hits_cam):
+                continue
             # sample color where the ball was last actually seen
             sample_pos = p[-1] if hit_span >= 1 and silence > 0 else hit_pos
             hit_pos = (float(hit_pos[0]), float(hit_pos[1]))
