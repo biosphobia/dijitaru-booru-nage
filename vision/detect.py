@@ -136,9 +136,12 @@ def evaluate_contact(p, f, radii, cfg):
         if n_a < 1.5 or n_b <= n_a:
             fail("recede", "did not recede over two frames after the turn")
             continue
-        # both post-turn observations must lie on the turned side
-        if float(v_a @ incoming) / n_a > cfg["side_cos"]:
-            fail("side", "first post-turn frame still on the approach side")
+        # the first post-turn observation is often smeared toward the wall
+        # (its blob still contains the incoming streak's tail) - allow that,
+        # but it must not have CONTINUED far along the approach direction
+        # the way a non-bouncing ball would
+        if float(v_a @ incoming) > max(4.0, 0.6 * speed):
+            fail("side", "still moving along the approach after the turn")
             continue
         cos_turn = float(v_b @ incoming) / n_b
         if cos_turn > cfg["min_cos"]:
@@ -237,7 +240,6 @@ def main():
         "straight_cos": straight_cos,
         "hover_max": hover_max,
         "min_cos": min_cos,
-        "side_cos": float(np.cos(np.radians(0.6 * min_turn_deg))),
         "lag": lag_correction,
     }
     base_threshold = det.get("diff_threshold", 25)
