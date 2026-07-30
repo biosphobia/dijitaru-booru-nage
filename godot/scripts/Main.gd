@@ -26,7 +26,7 @@ const BallGameScene := preload("res://scripts/BallGame.gd")
 const ModelStudioScene := preload("res://scripts/ModelStudio.gd")
 const CalibrationScene := preload("res://scripts/CalibrationScreen.gd")
 
-const BACKGROUND := Color(0.07, 0.32, 0.85)
+const BACKGROUND := Color(0.03, 0.03, 0.09)
 const MARK_COLORS := {
 	"lightblue": Color(0.45, 0.85, 1.0),
 	"orange": Color(1.0, 0.55, 0.15),

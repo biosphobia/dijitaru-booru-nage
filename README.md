@@ -2,15 +2,34 @@
 
 Throw ping pong balls at a wall, hit targets in a projected Godot game.
 
-The game is played entirely by throwing — there is nothing to click. It
-opens on a title screen whose **スタート** target starts a 60 second round:
-targets pop up on the wall, each hit scores, consecutive hits build a
-multiplier, and the result screen offers **もういちど** / **タイトル** as
-targets too. The high score is kept between sessions.
+**スペースボール投げ** — you are inside a spaceship and aliens are drifting
+down towards you. A **blue** ball damages the alien it lands nearest; an
+**orange** ball is a fireball that detonates and clears the screen. Clear a
+wave, collect coins, and every third wave choose one of two upgrades. Coins
+are the payout: at a stall they buy sweets.
 
-Every target has a hit area noticeably larger than the circle you see (the
-faint halo around it) to absorb throw and tracking error, and a hit is
-awarded to the target it lands nearest — so a throw only has to be close.
+The whole game is played by throwing — there is nothing to click, not even
+to start. Every target has a hit area noticeably larger than the circle you
+see (the thin ring around it) to absorb throw and tracking error, and a hit
+goes to the target it lands nearest, so a throw only has to be close.
+
+- **Waves** grow from a points budget, so they never run out. New alien
+  types unlock as you go: fast little ones, armoured ones that need three
+  hits, splitters, shielded ones, and a boss every fifth wave.
+- **Hull**: five hits. An alien that reaches the ship costs one; the run
+  ends when the hull is gone, and the result screen shows the coin total in
+  large type for whoever is paying out.
+- **Fireballs**: the player starts with 5 orange balls. Some upgrades hand
+  over 2 more — the game announces 「オレンジ球 +2」 full-screen so the
+  person running the stall knows to pass them over.
+- **Upgrades** every third wave, two to choose between, thrown at like
+  anything else. Later choices get stronger: wider hit areas and repairs
+  early, then double damage, chain hits and slow fields, then an auto
+  turret, a fever blast every eighth hit, a one-shot revive, double coins.
+
+Difficulty, payouts and sizes are all in `game.json`, and every image and
+sound can be replaced from a folder — see **Setting up the game** below.
+Neither needs a rebuild.
 
 ### Debug mode (press **D**)
 
@@ -40,10 +59,13 @@ webcam -> vision/detect.py -> UDP {"type":"hit","x":0.42,"y":0.61,"color":"red"}
 
 ## Parts
 
-- `godot/` — Godot 4.5 project: the game (`Game.gd`), the debug mode
-  (`DebugMenu.gd` + `BallGame.gd` / `ModelStudio.gd`), the throwable target
-  (`BallTarget.gd`), the calibration pattern screen, and the `BallInput.gd`
-  autoload that receives hits.
+- `godot/` — Godot 4.5 project. The game is `Game.gd` (waves, coins, hull,
+  screens) with `Enemy.gd`, `Upgrades.gd` and `Effects.gd`; `BallTarget.gd`
+  is the throwable target everything else is built from. `GameAssets.gd`
+  and `Tuning.gd` are the autoloads that read `game_assets/` and
+  `game.json`. `BallInput.gd` receives hits from the camera tool,
+  `DebugMenu.gd` holds the development modes, and `CalibrationScreen.gd`
+  draws the calibration pattern.
 - `vision/` — Python: `calibrate.py` (homography calibration),
   `detect.py` (ball tracker), `test_hit.py` (send a fake hit, no camera needed).
 
@@ -155,6 +177,65 @@ No camera handy? Test the game side alone:
 ```
 python vision/test_hit.py 0.5 0.5 orange
 ```
+
+The ball's **colour decides what the throw does**: `lightblue` is a normal
+shot, `orange` is a fireball. That comes from the `colors` ranges in
+`vision/config.json`, so tune those in the room's actual light before
+opening — a blue ball read as orange spends a fireball.
+
+## Setting up the game
+
+Two things sit **next to the game executable** and belong to whoever runs
+the stall. Both are created on first run, and neither needs Godot or a
+rebuild.
+
+### `game_assets/` — art and sound
+
+Drop a file in, restart the game, done. Everything is optional: whatever is
+missing keeps the built-in look, so an empty folder is a working game.
+
+```
+game_assets/
+  images/   background, cockpit, title, enemy_grunt, enemy_swift,
+            enemy_armor, enemy_splitter, enemy_shield, enemy_mini,
+            enemy_boss, explosion, fireball, coin, heart, target
+  sounds/   start, wave, hit, kill, miss, fireball, hull, upgrade,
+            gameover, music
+```
+
+Images are `.png` / `.jpg` / `.webp`, drawn centred on the thing they
+replace and scaled to its size — square with a transparent background
+works best. Sounds are `.ogg` / `.wav` / `.mp3`; `music` loops for the
+whole session. The folder's `README.txt` lists every name with what it is
+used for. (The aliens' Meshy models will plug in at the same spot later,
+rendered to a texture instead of a file.)
+
+### `game.json` — difficulty and payouts
+
+Written with every default the first time the game runs. Edited values are
+merged over the defaults, so a file holding only the two lines you care
+about is fine, and a typo can never delete a setting. Press **R** on the
+title screen to reload it without closing the game — that is the knob to
+turn between customers.
+
+The ones worth knowing on the day:
+
+| key | what it does |
+| --- | --- |
+| `run.hull` | hits the ship survives (5) |
+| `run.fireballs` | orange balls the player starts with (5) |
+| `run.upgrade_every` | a choice of upgrades every N waves (3) |
+| `coins.multiplier` | scales every payout at once — the prize dial |
+| `waves.budget_base` / `budget_per_wave` | how many aliens wave 1 has, and how fast that grows |
+| `waves.cross_time_start` / `_step` / `_min` | seconds an alien takes to reach the ship, and how much faster each wave gets |
+| `waves.max_alive_start` / `_max` | how many can be on screen at once |
+| `waves.boss_every` | boss wave every N waves (0 = never) |
+| `aim.tolerance` | throw slack, as a fraction of screen width (0.06 ≈ 77 px at 1280) — raise it if the room is unforgiving |
+| `enemies.<type>` | per-alien hp, radius, coins, speed, and which wave it first appears in |
+
+**Too hard for the queue?** Raise `run.hull`, raise `aim.tolerance`, raise
+`waves.cross_time_start`. **Paying out too much candy?** Lower
+`coins.multiplier` — it scales kills and bonuses together.
 
 ## Model Studio (Meshy.ai)
 

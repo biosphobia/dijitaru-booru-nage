@@ -12,6 +12,8 @@ config/features=PackedStringArray("4.5")
 
 [autoload]
 
+Tuning="*res://scripts/Tuning.gd"
+Assets="*res://scripts/GameAssets.gd"
 BallInput="*res://scripts/BallInput.gd"
 
 [display]

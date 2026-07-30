@@ -1,0 +1,4 @@
+# Written next to the game on first run: the tuning file and the drop-in
+# art/sound folder. Both belong to whoever runs the stall, not here.
+game.json
+game_assets/

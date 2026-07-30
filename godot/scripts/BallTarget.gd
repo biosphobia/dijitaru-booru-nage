@@ -16,8 +16,9 @@ signal hit
 signal expired
 
 const GROUP := "ball_targets"
-## Extra hit radius around the drawn circle, as a fraction of screen width.
-## This is the throw-error budget: at 1280 wide it is ~77 px of slack.
+## Fallback extra hit radius as a fraction of screen width, used when the
+## tuning file has nothing to say. This is the throw-error budget: at 1280
+## wide it is ~77 px of slack, on top of the drawn radius.
 const TOLERANCE_FRAC := 0.06
 const POP_TIME := 0.22
 const GROW_TIME := 0.18
@@ -29,6 +30,8 @@ var text_color := Color(0.06, 0.14, 0.36)
 var font_size := 40
 ## Seconds before the target leaves on its own (0 = stays until hit).
 var lifetime := 0.0
+## Extra slack on top of the tuned tolerance (the aim upgrade adds to it).
+var tolerance_bonus := 0.0
 
 var _left := 0.0
 var _age := 0.0
@@ -79,7 +82,8 @@ func hit_radius() -> float:
 	var width := 1280.0
 	if is_inside_tree():
 		width = get_viewport_rect().size.x
-	return radius + TOLERANCE_FRAC * width
+	var frac := float(Tuning.n("aim.tolerance", TOLERANCE_FRAC)) + tolerance_bonus
+	return radius + frac * width
 
 # -- contract used by BallInput's hit snapping ----------------------------
 
