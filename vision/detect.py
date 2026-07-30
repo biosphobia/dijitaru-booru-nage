@@ -46,6 +46,7 @@ class Track:
         self.radii.append(radius)
         self.frames.append(frame_idx)
         self.last_seen = frame_idx
+        self.born = time.monotonic()
         self.hit_fired = False
 
     def add(self, pos, radius, frame_idx):
@@ -248,6 +249,15 @@ def main():
         "min_cos": min_cos,
         "lag": lag_correction,
     }
+    # Vanish hits: a ball on a long consistent approach that stops being
+    # detected mid-frame (away from the camera edges) has hit the wall -
+    # near impact it slows below the motion threshold, so the bounce
+    # itself is often invisible. Nothing else enters the projection.
+    vanish_hits = det.get("vanish_hits", True)
+    vanish_silence = det.get("vanish_silence", 3)     # frames of silence
+    vanish_approach = approach_frames + 2             # longer proof needed
+    vanish_lead = det.get("vanish_lead", 0.75)        # steps past last obs
+    edge_margin = det.get("edge_margin", 25)          # px at processing scale
     base_threshold = det.get("diff_threshold", 25)
     auto_threshold = det.get("auto_threshold", True)
     noise_multiplier = det.get("noise_multiplier", 6.0)
@@ -263,6 +273,7 @@ def main():
     prev_gray = None
     tracks = []
     recent_hits = []  # (time, normalized_pos)
+    recent_hits_cam = []  # (time, camera px) - debris suppression for vanish hits
     recent_frames = deque(maxlen=4)  # small color frames, for sampling pre-impact color
     frame_idx = 0
     game_poly = None
@@ -389,30 +400,75 @@ def main():
 
         # --- hit detection ----------------------------------------------
         for track in tracks:
-            if track.hit_fired or track.last_seen != frame_idx:
+            if track.hit_fired:
                 continue
+            silence = frame_idx - track.last_seen
             p = [np.array(pt, dtype=np.float64) for pt in track.positions]
             hit_pos = None
             hit_radius = 0.0
             hit_span = 0  # how many frames ago the contact frame was
-            if mode == "instant" and len(p) >= 3:
+            if silence == 0 and mode == "instant" and len(p) >= 3:
                 steps = [p[-2] - p[-3], p[-1] - p[-2]]
                 direction, _, _ = consistent_direction(steps, min_speed, straight_cos)
                 if direction is not None:
                     hit_pos = p[-1]
                     hit_radius = track.radii[-1]
-            elif mode == "reversal":
-                # Wall contact has a fixed physical shape: a consistent
-                # straight fast APPROACH, an optional short HOVER cluster at
-                # the contact point, then RECEDING observations turned by
-                # >= min_turn_deg. See evaluate_contact.
+            elif silence == 0 and mode == "reversal":
+                # Wall contact with a visible bounce: a consistent straight
+                # fast APPROACH, an optional short HOVER cluster at the
+                # contact point, then a trajectory KINK (turn or sudden
+                # slowdown). See evaluate_contact.
                 hit, _ = evaluate_contact(
                     p, list(track.frames), list(track.radii), contact_cfg)
                 if hit is not None:
                     hit_pos, hit_radius, hit_span = hit
+            elif (vanish_hits and mode == "reversal"
+                  and silence == vanish_silence and len(p) >= vanish_approach + 1):
+                # Wall contact with an INVISIBLE bounce: the ball slowed
+                # below detection right at the wall and the track went
+                # silent mid-frame. Demand a longer gap-free consistent
+                # approach ending at the final observation, away from the
+                # camera edges (an exiting ball dies at the border).
+                f = list(track.frames)
+                if f[-1] - f[-1 - vanish_approach] <= vanish_approach + 1:
+                    steps = [p[i + 1] - p[i]
+                             for i in range(len(p) - 1 - vanish_approach, len(p) - 1)]
+                    incoming, speed, _ = consistent_direction(
+                        steps, min_speed, straight_cos)
+                    x, y = p[-1]
+                    inside = (edge_margin < x < small.shape[1] - edge_margin
+                              and edge_margin < y < small.shape[0] - edge_margin)
+                    # motion whose approach STARTED near a recent hit is the
+                    # OUTGOING ball - its later fade is not a new impact
+                    now_t = time.monotonic()
+                    start = p[-1 - vanish_approach]
+                    debris = any(
+                        now_t - t_hit < 1.5
+                        and np.hypot(start[0] - hp[0], start[1] - hp[1]) < 80.0
+                        for t_hit, hp in recent_hits_cam)
+                    # if another live track continues the flight ahead along
+                    # the same line, the ball did not hit anything - the
+                    # tracker just hiccuped and re-acquired it
+                    continued = False
+                    if incoming is not None:
+                        for other in tracks:
+                            if other is track or frame_idx - other.last_seen > 1:
+                                continue
+                            d = np.array(other.positions[-1]) - p[-1]
+                            along = float(d @ incoming)
+                            perp = float(np.hypot(*(d - along * incoming)))
+                            if 0.0 < along < speed * (silence + 3) and perp < 40.0:
+                                continued = True
+                                break
+                    if incoming is not None and inside and not debris and not continued:
+                        hit_pos = p[-1] + incoming * (speed * vanish_lead)
+                        hit_radius = track.radii[-1]
+                        hit_span = silence
             if hit_pos is None:
                 continue
             track.hit_fired = True
+            # sample color where the ball was last actually seen
+            sample_pos = p[-1] if hit_span >= 1 and silence > 0 else hit_pos
             hit_pos = (float(hit_pos[0]), float(hit_pos[1]))
 
             # Transform the hit point plus a point one ball-radius away, so
@@ -440,7 +496,7 @@ def main():
             # sample the ball color from the contact frame at the contact
             # point - that is exactly where and when the ball is in view
             frame_back = min(hit_span + 1, len(recent_frames))
-            color = classify_color(recent_frames[-frame_back], hit_pos,
+            color = classify_color(recent_frames[-frame_back], sample_pos,
                                    max(4.0, hit_radius), color_defs)
 
             packet = {
@@ -451,6 +507,8 @@ def main():
                 "color": color,
             }
             sock.sendto(json.dumps(packet).encode("utf-8"), udp_addr)
+            recent_hits_cam.append((now, hit_pos))
+            recent_hits_cam[:] = [(t, q) for t, q in recent_hits_cam if now - t < 2.0]
             print("HIT", packet)
             if preview:
                 cv2.circle(small, (int(hit_pos[0]), int(hit_pos[1])), 18, (0, 0, 255), 3)
