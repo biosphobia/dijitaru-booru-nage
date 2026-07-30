@@ -1,15 +1,22 @@
-"""Ball tracker: watches the wall through the webcam, detects ball impacts
+"""Ball tracker: watches the wall through the camera, detects ball impacts
 and sends them to the Godot game as UDP "hit" packets.
 
 Run calibrate.py first, then:  python detect.py
 
-How a hit is detected (config "mode"):
-  "reversal" - a fast-moving blob whose direction of travel suddenly flips
-               (the ball bouncing off the wall). Use this for real play.
-  "instant"  - the first time a new fast-moving blob is seen. Handy for
-               desk-testing by waving a ball in front of the camera.
+Built for the reality of a small fast ball on a noisy camera (PS3 Eye):
+  - the threshold floats above the measured sensor grain automatically
+  - grain specks are erased by morphological opening before blob search
+  - a fast ball shows up as a motion-blur STREAK, not a circle - blobs
+    are accepted by area, tracked by centroid, and the ball radius is
+    taken from the streak's narrow side
+  - a hit ("reversal" mode) requires a consistent straight fast approach
+    (a thrown ball flies straight; grain and light artifacts do not)
+    followed by a sharp direction break - the bounce off the wall
 
-Preview window keys:  Q = quit
+"instant" mode fires on any short consistent motion instead - handy for
+desk-testing by waving a ball in front of the camera.
+
+Preview window keys:  Q = quit   M = toggle motion-mask view
 """
 
 import json
@@ -32,17 +39,44 @@ class Track:
     def __init__(self, pos, radius, frame_idx):
         self.id = Track._next_id
         Track._next_id += 1
-        self.positions = deque(maxlen=8)  # processing-scale pixels
-        self.radii = deque(maxlen=8)
+        self.positions = deque(maxlen=12)  # processing-scale pixels
+        self.radii = deque(maxlen=12)
+        self.frames = deque(maxlen=12)  # frame index of each observation
         self.positions.append(pos)
         self.radii.append(radius)
+        self.frames.append(frame_idx)
         self.last_seen = frame_idx
         self.hit_fired = False
 
     def add(self, pos, radius, frame_idx):
         self.positions.append(pos)
         self.radii.append(radius)
+        self.frames.append(frame_idx)
         self.last_seen = frame_idx
+
+
+def consistent_direction(steps, min_speed, straight_cos, speed_ratio=3.0):
+    """If every step is fast, aligned with the mean direction, and of
+    similar length, return the mean direction (unit vector); else None.
+    A real thrown ball moves fast, straight, and at near-constant speed -
+    sensor grain and chained flicker artifacts do none of that."""
+    units, speeds = [], []
+    for s in steps:
+        n = np.hypot(s[0], s[1])
+        if n < min_speed:
+            return None
+        units.append(s / n)
+        speeds.append(n)
+    if max(speeds) > speed_ratio * min(speeds):
+        return None
+    mean = np.sum(units, axis=0)
+    norm = np.hypot(mean[0], mean[1])
+    if norm < 1e-9:
+        return None
+    mean /= norm
+    if any(float(u @ mean) < straight_cos for u in units):
+        return None
+    return mean
 
 
 def classify_color(frame_bgr, pos, radius, color_defs):
@@ -109,22 +143,32 @@ def main():
     proc_width = det.get("processing_width", 640)
     min_area = det.get("min_area", 30)
     max_area = det.get("max_area", 2500)
-    min_circularity = det.get("min_circularity", 0.4)
     min_speed = det.get("min_speed", 6.0)  # px/frame at processing scale
-    max_match_dist = det.get("max_match_dist", 90.0)
+    max_match_dist = det.get("max_match_dist", 55.0)
     track_timeout = det.get("track_timeout_frames", 5)
     mode = det.get("mode", "reversal")
     # contact = a sharp trajectory break: the direction must change by at
     # least this many degrees between incoming and outgoing motion
     min_turn_deg = det.get("min_turn_deg", 60.0)
     min_cos = np.cos(np.radians(min_turn_deg))
-    # a blob must have been tracked this many frames before it can fire -
-    # something merely appearing inside the projection is never a hit
-    min_track_frames = det.get("min_track_frames", 3)
+    # a hit needs this many consecutive fast, straight steps before the
+    # turn - noise cannot fake a real approach flight
+    approach_frames = det.get("approach_frames", 4)
+    straight_cos = np.cos(np.radians(det.get("straightness_deg", 45.0)))
+    # observations allowed to cluster at the contact point before receding
+    hover_max = det.get("hover_max", 3)
+    # motion-diff centroids trail the ball by ~half a streak; nudge the
+    # contact estimate forward along the approach by this * approach speed
+    lag_correction = det.get("lag_correction", 0.5)
+    base_threshold = det.get("diff_threshold", 25)
+    auto_threshold = det.get("auto_threshold", True)
+    noise_multiplier = det.get("noise_multiplier", 6.0)
     cooldown_ms = det.get("cooldown_ms", 250)
     cooldown_radius = det.get("cooldown_radius", 0.06)  # normalized game units
     preview = config.get("preview", True)
+    show_mask = False
     color_defs = config.get("colors", [])
+    kernel3 = np.ones((3, 3), np.uint8)
 
     print("Sending hits to udp://%s:%d  (mode: %s)" % (udp_addr[0], udp_addr[1], mode))
 
@@ -182,8 +226,16 @@ def main():
         # --- motion detection -------------------------------------------
         diff = cv2.absdiff(gray, prev_gray)
         prev_gray = gray
-        _, mask = cv2.threshold(diff, det.get("diff_threshold", 25), 255, cv2.THRESH_BINARY)
-        mask = cv2.dilate(mask, None, iterations=2)
+        thr = float(base_threshold)
+        if auto_threshold:
+            # most pixels are static, so the median absolute difference is
+            # the sensor grain level - float the threshold above it
+            thr = max(thr, noise_multiplier * float(np.median(diff[::4, ::4])))
+        _, mask = cv2.threshold(diff, thr, 255, cv2.THRESH_BINARY)
+        # opening erases isolated grain specks; the dilation afterwards
+        # reconnects the ball's motion-blur streak
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel3)
+        mask = cv2.dilate(mask, kernel3, iterations=1)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         detections = []
@@ -191,24 +243,34 @@ def main():
             area = cv2.contourArea(cnt)
             if not (min_area <= area <= max_area):
                 continue
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter <= 0:
+            m = cv2.moments(cnt)
+            if m["m00"] <= 0:
                 continue
-            circularity = 4.0 * np.pi * area / (perimeter * perimeter)
-            if circularity < min_circularity:
-                continue
-            (cx, cy), radius = cv2.minEnclosingCircle(cnt)
-            detections.append(((cx, cy), radius))
+            center = (m["m10"] / m["m00"], m["m01"] / m["m00"])
+            # a fast ball is a motion-blur streak: its narrow side is the
+            # ball diameter no matter how fast it flies
+            (_, (rw, rh), _) = cv2.minAreaRect(cnt)
+            radius = max(2.0, min(rw, rh) / 2.0)
+            detections.append((center, radius))
 
-        # --- track association (nearest neighbour) ----------------------
+        # --- track association --------------------------------------------
+        # Constant-velocity prediction: a moving ball's blob chain matches
+        # its own predicted continuation, so the streak's leading and
+        # trailing diff blobs form separate stable chains instead of
+        # cross-stealing each other's detections. (Both chains see the
+        # bounce; the duplicate hit is absorbed by the cooldown.)
         unmatched = list(range(len(detections)))
         for track in tracks:
+            if len(track.positions) >= 2:
+                lx, ly = track.positions[-1]
+                qx, qy = track.positions[-2]
+                pred = (2.0 * lx - qx, 2.0 * ly - qy)
+            else:
+                pred = track.positions[-1]
             best, best_d = None, max_match_dist
             for i in unmatched:
-                d = np.hypot(
-                    detections[i][0][0] - track.positions[-1][0],
-                    detections[i][0][1] - track.positions[-1][1],
-                )
+                d = np.hypot(detections[i][0][0] - pred[0],
+                             detections[i][0][1] - pred[1])
                 if d < best_d:
                     best, best_d = i, d
             if best is not None:
@@ -222,38 +284,67 @@ def main():
         for track in tracks:
             if track.hit_fired or track.last_seen != frame_idx:
                 continue
-            p = track.positions
+            p = [np.array(pt, dtype=np.float64) for pt in track.positions]
             hit_pos = None
             hit_radius = 0.0
-            if mode == "instant" and len(p) >= 2:
-                if np.hypot(p[-1][0] - p[-2][0], p[-1][1] - p[-2][1]) >= min_speed:
+            hit_span = 0  # how many frames ago the contact frame was
+            if mode == "instant" and len(p) >= 3:
+                steps = [p[-2] - p[-3], p[-1] - p[-2]]
+                if consistent_direction(steps, min_speed, straight_cos) is not None:
                     hit_pos = p[-1]
                     hit_radius = track.radii[-1]
-            elif mode == "reversal" and len(p) >= min_track_frames:
-                # Wall contact = a sharp break in the trajectory: the blob was
-                # moving fast, then its direction changed by >= min_turn_deg
-                # (a clean bounce flips ~180 deg; a dead bounce that drops
-                # down the wall turns ~90 deg - both count). span=1 catches a
-                # flip between adjacent frames; span=2 skips over the
-                # near-stationary frame right at the impact point.
-                for span in (1, 2):
-                    if len(p) < 2 * span + 1:
+            elif mode == "reversal":
+                # Wall contact has a fixed physical shape:
+                #   1. consistent straight fast APPROACH (a real thrown
+                #      ball; grain and flicker cannot fake one)
+                #   2. optional short HOVER: observations clustered at the
+                #      contact point (the streak folds onto itself)
+                #   3. RECEDE: two consecutive observations moving away,
+                #      turned >= min_turn_deg from the approach (a clean
+                #      bounce ~180 deg, a dead drop down the wall ~90 deg).
+                #      A one-frame light artifact can never recede twice.
+                f = list(track.frames)
+                n = len(p)
+                for e in range(n - 3, n - 4 - hover_max, -1):
+                    if e < approach_frames:
+                        break
+                    # approach must be a gap-free frame run - a fast ball is
+                    # detected every frame at 60 fps, chained noise is not;
+                    # hover/recede may miss a couple (impact diff is small)
+                    if f[e] - f[e - approach_frames] != approach_frames:
                         continue
-                    mid = -1 - span
-                    v1 = (p[mid][0] - p[mid - span][0], p[mid][1] - p[mid - span][1])
-                    v2 = (p[-1][0] - p[mid][0], p[-1][1] - p[mid][1])
-                    n1, n2 = np.hypot(*v1), np.hypot(*v2)
-                    incoming_speed = n1 / span
-                    if incoming_speed < min_speed or n2 < 1e-6:
+                    if f[-1] - f[e] > (n - 1 - e) + 1:
                         continue
-                    cos_turn = (v1[0] * v2[0] + v1[1] * v2[1]) / (n1 * n2)
-                    if cos_turn <= min_cos:
-                        hit_pos = p[mid]  # the turning point = the wall contact
-                        hit_radius = track.radii[mid]
+                    steps = [p[i + 1] - p[i]
+                             for i in range(e - approach_frames, e)]
+                    incoming = consistent_direction(steps, min_speed, straight_cos)
+                    if incoming is None:
+                        continue
+                    speed = float(np.mean([np.hypot(s[0], s[1]) for s in steps]))
+                    hover = [p[i] for i in range(e + 1, n - 2)]
+                    if any(np.hypot(*(q - p[e])) > speed * 1.2 for q in hover):
+                        continue
+                    v_a = p[-2] - p[e]
+                    v_b = p[-1] - p[e]
+                    n_a = np.hypot(v_a[0], v_a[1])
+                    n_b = np.hypot(v_b[0], v_b[1])
+                    if n_a < 2.0 or n_b <= n_a:
+                        continue  # not receding over both post-turn frames
+                    # both post-turn observations must lie on the turned side
+                    if float(v_a @ incoming) / n_a > np.cos(np.radians(0.6 * min_turn_deg)):
+                        continue
+                    if float(v_b @ incoming) / n_b <= min_cos:
+                        # contact = the hover cluster, nudged forward by the
+                        # half-streak lag of motion-diff centroids
+                        cluster = np.mean([p[e]] + hover, axis=0)
+                        hit_pos = cluster + incoming * (speed * lag_correction)
+                        hit_radius = track.radii[e]
+                        hit_span = n - 1 - e
                         break
             if hit_pos is None:
                 continue
             track.hit_fired = True
+            hit_pos = (float(hit_pos[0]), float(hit_pos[1]))
 
             # Transform the hit point plus a point one ball-radius away, so
             # the game can draw the mark at the ball's real projected size.
@@ -277,11 +368,11 @@ def main():
                 continue
             recent_hits.append((now, (float(norm[0]), float(norm[1]))))
 
-            # sample the ball color a couple of frames back, while it was
-            # still in flight (less contaminated by the projection); frame
-            # and position index must match so we sample where the ball WAS
-            back = min(3, len(p), len(recent_frames))
-            color = classify_color(recent_frames[-back], p[-back], 8, color_defs)
+            # sample the ball color from the contact frame at the contact
+            # point - that is exactly where and when the ball is in view
+            frame_back = min(hit_span + 1, len(recent_frames))
+            color = classify_color(recent_frames[-frame_back], hit_pos,
+                                   max(4.0, hit_radius), color_defs)
 
             packet = {
                 "type": "hit",
@@ -297,14 +388,22 @@ def main():
 
         # --- preview ------------------------------------------------------
         if preview:
+            if show_mask:
+                small = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
             cv2.polylines(small, [game_poly], True, (0, 200, 0), 2)
             for track in tracks:
                 pts = np.array(track.positions, dtype=np.int32)
                 cv2.polylines(small, [pts], False, (255, 180, 0), 2)
                 cv2.circle(small, (int(pts[-1][0]), int(pts[-1][1])), 4, (255, 180, 0), -1)
+            cv2.putText(small, "thr %.0f  blobs %d  M=mask" % (thr, len(detections)),
+                        (10, small.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (200, 200, 200), 1)
             cv2.imshow("detect", small)
-            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
                 break
+            if key == ord("m"):
+                show_mask = not show_mask
 
     cam.release()
     cv2.destroyAllWindows()

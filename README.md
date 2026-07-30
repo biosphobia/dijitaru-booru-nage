@@ -178,17 +178,27 @@ needs the API key.
   - `"instant"` — fires on the first fast motion it sees. Handy for desk
     testing by waving a ball in front of the camera.
 - `min_area` / `max_area` — accepted blob size in pixels (at the 640-wide
-  processing scale). Shrink/grow if balls are missed or noise triggers.
-- `diff_threshold` — raise if projector flicker causes false motion.
+  processing scale). A fast ball is a motion-blur *streak*, so blobs are
+  elongated — that is expected and handled.
+- `auto_threshold` / `noise_multiplier` — the motion threshold floats
+  above the measured sensor grain automatically (essential for the PS3
+  Eye). Raise `noise_multiplier` if grain still becomes blobs;
+  `diff_threshold` is the fixed floor.
 - `min_speed` — minimum ball speed in px/frame; lower it if soft throws
   are missed.
-- `min_turn_deg` — how sharply the trajectory must break to count as
-  contact (default 60°). Raise toward 90 if passing balls false-trigger;
-  lower toward 45 if soft contacts are missed.
-- `min_track_frames` — a blob must have been tracked this many frames
-  before it may fire, so something just appearing on camera can't be a hit.
+- `approach_frames` — a hit needs this many consecutive fast, straight,
+  similar-speed steps before the bounce (default 4). This is the main
+  noise gate: grain and light artifacts cannot fake a real approach.
+  Lower to 3 if genuine hits get missed.
+- `straightness_deg` — how much the approach may wobble (default 45°).
+- `min_turn_deg` — how sharply the trajectory must break at contact
+  (default 60°). Raise toward 90 if passing balls false-trigger; lower
+  toward 45 if soft contacts are missed.
 - `cooldown_ms` / `cooldown_radius` — double-hit suppression (a ball
   bouncing twice near the same spot counts once).
+- In the detect preview window, press **M** to see the motion mask —
+  if it is full of speckles, raise `noise_multiplier`; if the ball
+  streak is invisible in it, lower `diff_threshold`.
 - `colors` — HSV ranges used to name the ball color (`h` 0–179, OpenCV
   convention). Ships with `lightblue` and `orange`. Tune them in your
   actual room lighting: the projector tints the balls.

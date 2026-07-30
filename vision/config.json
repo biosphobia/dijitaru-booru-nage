@@ -18,19 +18,33 @@
     "mode": "reversal",
     "processing_width": 640,
     "diff_threshold": 25,
+    "auto_threshold": true,
+    "noise_multiplier": 6.0,
     "min_area": 30,
     "max_area": 2500,
-    "min_circularity": 0.4,
     "min_speed": 6.0,
     "min_turn_deg": 60.0,
-    "min_track_frames": 3,
-    "max_match_dist": 90.0,
+    "approach_frames": 4,
+    "straightness_deg": 45.0,
+    "max_match_dist": 55.0,
     "track_timeout_frames": 5,
     "cooldown_ms": 250,
     "cooldown_radius": 0.06
   },
   "colors": [
-    { "name": "lightblue", "h_min": 80, "h_max": 110, "s_min": 40, "v_min": 90 },
-    { "name": "orange", "h_min": 5, "h_max": 25, "s_min": 80, "v_min": 70 }
+    {
+      "name": "lightblue",
+      "h_min": 80,
+      "h_max": 110,
+      "s_min": 40,
+      "v_min": 90
+    },
+    {
+      "name": "orange",
+      "h_min": 5,
+      "h_max": 25,
+      "s_min": 80,
+      "v_min": 70
+    }
   ]
 }
