@@ -95,6 +95,10 @@ def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9,
     # judge straightness only on steps long enough for their direction to
     # be meaningful; jitter-sized steps cannot disprove a straight flight
     judged = [(u, n) for u, n in zip(units, speeds) if n > 2.0 * noise]
+    # ...but a flight whose steps are MOSTLY jitter-sized is not a flight:
+    # one random excursion among tiny steps must not pass as an approach
+    if 2 * len(judged) < len(units):
+        return None, 0.0, "approach dominated by jitter-sized steps"
     if judged:
         worst_u, _ = min(judged, key=lambda un: float(un[0] @ mean))
         worst = float(worst_u @ mean)
@@ -179,7 +183,7 @@ def evaluate_contact(p, f, radii, cfg):
     """
     n = len(p)
     best_stage, best_reason = -1, "track too short (%d observations)" % n
-    min_e = cfg.get("min_e", 3)  # 3 approach steps = minimum usable evidence
+    min_e = cfg.get("min_e", 2)  # 2 fast approach steps = minimum evidence
     for e in range(n - 3, n - 4 - cfg["hover_max"], -1):
         if e < min_e:
             break
@@ -201,7 +205,7 @@ def evaluate_contact(p, f, radii, cfg):
         # below is required on top of them either way.
         incoming, speed, vels, why = None, 0.0, None, ""
         used_alen = 0
-        for alen in range(cfg["approach"], 2, -1):
+        for alen in range(cfg["approach"], cfg.get("min_alen", 2) - 1, -1):
             if e - alen < 0:
                 continue  # window does not fit; a shorter one may
             # approach must be a near-gap-free frame run (two misses
@@ -214,6 +218,15 @@ def evaluate_contact(p, f, radii, cfg):
                     for i in range(e - alen, e)]
             incoming, speed, why = consistent_direction(
                 cand, cfg["min_speed"], cfg["straight_cos"])
+            # A bare 2-step approach is enough evidence only for a ball
+            # that is clearly FLYING and only when the track genuinely had
+            # no room for more (turn right after birth - steep camera
+            # angles compress the whole flight into a handful of
+            # observations). A long track failing its 3-step windows must
+            # not fall back to two.
+            if incoming is not None and alen == 2 \
+                    and (e >= 4 or speed < 2.5 * cfg["min_speed"]):
+                incoming, why = None, "2-step approach not fast enough"
             if incoming is not None:
                 vels = cand
                 used_alen = alen
@@ -319,6 +332,34 @@ def evaluate_contact(p, f, radii, cfg):
                     hit_pos = meet
         return (hit_pos, radii[e], n - 1 - e, incoming), ""
     return None, best_reason
+
+
+def evaluate_contact_reversed(p, f, radii, cfg):
+    """evaluate_contact on the time-reversed track.
+
+    A bounce is provable from either side: when a steep camera angle
+    compresses the visible APPROACH to one or two observations, the
+    OUTGOING flight still carries full evidence. Reversed, the outgoing
+    leg becomes a clean approach and the incoming leg the recede.
+    Gravity keeps its sign under time reversal (the spatial curve is the
+    same parabola); the centroid-lag nudge would point the wrong way, so
+    it is disabled.
+    """
+    if len(p) > 9:
+        # only for angle-compressed flights: a long track with no valid
+        # forward approach is junk, not a foreshortened throw
+        return None, "track long enough for forward evidence"
+    rp = list(reversed(p))
+    rf = [-x for x in reversed(f)]
+    rr = list(reversed(radii))
+    # the outgoing leg carries the proof here, so demand full windows
+    hit, why = evaluate_contact(rp, rf, rr,
+                                dict(cfg, lag=0.0, min_e=3, min_alen=3))
+    if hit is None:
+        return None, why
+    pos, rad, back_rev, inc_rev = hit
+    n = len(p)
+    return (pos, rad, n - 1 - back_rev, -inc_rev), why
 
 
 def classify_color(frame_bgr, pos, radius, color_defs):
@@ -455,6 +496,17 @@ def main():
     # a SLOW ball can fade from detection without hitting anything (its
     # frame difference shrinks) - vanish hits need clearly-flying speed
     vanish_min_speed = det.get("vanish_min_speed_norm", min_speed * 2.0)
+    # shorter vanish windows are allowed for proportionally FASTER flights
+    vanish_windows = [(vanish_approach, 1.0), (4, 1.2), (3, 1.5)]
+    vanish_windows = [(w, m) for w, m in vanish_windows if w <= vanish_approach]
+    # Emerge hits: the mirror of vanish. A consistent fast chain that
+    # BEGINS mid-wall (not at a screen edge, not moving inward from the
+    # projection border, no predecessor track behind it) is a ball the
+    # wall just ejected - the impact itself was below detection.
+    emerge_hits = det.get("emerge_hits", True)
+    emerge_approach = det.get("emerge_approach_steps", 4)
+    emerge_min_speed = det.get("emerge_min_speed_norm", min_speed * 2.0)
+    emerge_lead = det.get("emerge_lead", 0.75)        # steps before first obs
     base_threshold = det.get("diff_threshold", 25)
     auto_threshold = det.get("auto_threshold", True)
     noise_multiplier = det.get("noise_multiplier", 6.0)
@@ -469,6 +521,7 @@ def main():
 
     prev_gray = None
     tracks = []
+    graveyard = []  # (last_frame, last screen pos) of recently pruned tracks
     noise_sample_mask = None  # pixels used to estimate sensor grain
     recent_hits = []  # (time, normalized_pos)
     recent_hits_s = []  # (time, screen pos) - twin/debris suppression
@@ -605,6 +658,7 @@ def main():
             if frame_idx - t.last_seen <= track_timeout:
                 alive.append(t)
                 continue
+            graveyard.append((t.frames[-1], np.array(t.spos[-1])))
             if not t.hit_fired and len(t.positions) >= 5:
                 ts = list(t.spos)
                 sspeeds = [np.hypot(*(ts[i + 1] - ts[i])) for i in range(len(ts) - 1)]
@@ -618,6 +672,7 @@ def main():
                     print("MISS track#%d len=%d vmax=%.0f/1000 gaps=%d: %s  path=%s"
                           % (t.id, len(ts), max(sspeeds) * 1000, gaps, reason, path))
         tracks = alive
+        graveyard[:] = [(fr, q) for fr, q in graveyard if frame_idx - fr <= 15]
 
         # --- hit detection (all gates in screen space) -------------------
         for track in tracks:
@@ -646,21 +701,102 @@ def main():
                 # slowdown, or the deadened ball dropping straight down).
                 hit, _ = evaluate_contact(
                     s, list(track.frames), list(track.radii), contact_cfg)
+                if hit is None:
+                    # provable from the other side too: a steep camera
+                    # angle can compress the approach to 1-2 observations
+                    # while the outgoing flight is long and clean
+                    hit, _ = evaluate_contact_reversed(
+                        s, list(track.frames), list(track.radii), contact_cfg)
                 if hit is not None:
                     hit_s, hit_radius, hit_span, hit_dir = hit
+                elif (emerge_hits
+                        and emerge_approach + 1 <= len(s) <= emerge_approach + 2):
+                    # EMERGE: a chain that begins mid-wall is a ball the
+                    # wall just ejected (the impact was below detection).
+                    # Try once at birth+window, once more skipping a
+                    # possibly-junky first observation.
+                    start = len(s) - 1 - emerge_approach
+                    fq = list(track.frames)
+                    now_t = time.monotonic()
+                    if fq[-1] - fq[start] <= emerge_approach + 2:
+                        vels = [(s[i + 1] - s[i]) / max(1, fq[i + 1] - fq[i])
+                                for i in range(start, len(s) - 1)]
+                        outgoing, speed, _ = consistent_direction(
+                            vels, min_speed, straight_cos)
+                        s0 = s[start]
+                        x0c, y0c = p[start]
+                        inside = (edge_margin < x0c < small.shape[1] - edge_margin
+                                  and edge_margin < y0c < small.shape[0] - edge_margin)
+                        ok = (outgoing is not None and speed >= emerge_min_speed
+                              and inside)
+                        if ok:
+                            # a chain starting at the projection BORDER and
+                            # moving inward is a ball ENTERING the game
+                            # area, not one ejected by the wall
+                            edges = [(s0[0], np.array([1.0, 0.0])),
+                                     (screen_aspect - s0[0], np.array([-1.0, 0.0])),
+                                     (s0[1], np.array([0.0, 1.0])),
+                                     (1.0 - s0[1], np.array([0.0, -1.0]))]
+                            d_edge, inward = min(edges, key=lambda q: q[0])
+                            if d_edge < 0.10 and float(outgoing @ inward) > 0.5:
+                                ok = False
+                        if ok:
+                            # outgoing debris of a REGISTERED hit also
+                            # emerges - born at the hit point
+                            if any(now_t - t_h < 1.5
+                                   and float(np.hypot(*(s0 - hq))) < 0.12
+                                   for t_h, hq in recent_hits_s):
+                                ok = False
+                        if ok:
+                            # a track that broke and re-acquired also
+                            # "emerges": look for a predecessor that went
+                            # silent just behind the chain start
+                            birth = fq[start]
+                            cands = [(o.frames[-1], o.spos[-1]) for o in tracks
+                                     if o is not track and o.last_seen <= birth]
+                            for died, q in cands + graveyard:
+                                if not (0 <= birth - died <= 4):
+                                    continue
+                                d = s0 - np.asarray(q)
+                                along = float(d @ outgoing)
+                                perp = float(np.hypot(*(d - along * outgoing)))
+                                if -0.02 < along < speed * (birth - died + 2) \
+                                        and perp < 0.10:
+                                    ok = False
+                                    break
+                        if ok:
+                            g = contact_cfg["gravity"]
+                            v_start = outgoing * speed \
+                                - _DOWN * (g * 0.5 * emerge_approach)
+                            hit_s = s0 - v_start * emerge_lead \
+                                + _DOWN * (0.5 * g * emerge_lead * emerge_lead)
+                            hit_radius = track.radii[start]
+                            hit_span = len(s) - 1 - start
+                            hit_dir = -outgoing
             elif (vanish_hits and mode == "reversal"
-                  and silence == vanish_silence and len(s) >= vanish_approach + 1):
+                  and silence == vanish_silence and len(s) >= 4):
                 # Wall contact with an INVISIBLE break: the soft screen
                 # deadened the ball below detection and the track went
-                # silent mid-frame. Demand a longer gap-free consistent
-                # approach ending at the final observation, away from the
-                # camera edges (an exiting ball dies at the border).
+                # silent mid-frame. Demand a gap-free consistent approach
+                # ending at the final observation, away from the camera
+                # edges (an exiting ball dies at the border). Shorter
+                # windows are accepted only for proportionally faster
+                # flights (steep camera angles compress the visible arc).
                 f = list(track.frames)
-                if f[-1] - f[-1 - vanish_approach] <= vanish_approach + 2:
+                incoming, speed = None, 0.0
+                for va, mult in vanish_windows:
+                    if len(s) < va + 1 or f[-1] - f[-1 - va] > va + 2:
+                        continue
                     vels = [(s[i + 1] - s[i]) / max(1, f[i + 1] - f[i])
-                            for i in range(len(s) - 1 - vanish_approach, len(s) - 1)]
+                            for i in range(len(s) - 1 - va, len(s) - 1)]
                     incoming, speed, _ = consistent_direction(
                         vels, min_speed, straight_cos)
+                    if incoming is not None \
+                            and speed >= vanish_min_speed * mult:
+                        vanish_approach_used = va
+                        break
+                    incoming = None
+                if incoming is not None:
                     x, y = p[-1]
                     inside = (edge_margin < x < small.shape[1] - edge_margin
                               and edge_margin < y < small.shape[0] - edge_margin)
@@ -698,15 +834,14 @@ def main():
                             if 0.0 < along < speed * (silence + 3) and perp < 0.10:
                                 continued = True
                                 break
-                    if (incoming is not None and speed >= vanish_min_speed
-                            and inside and not debris and not continued):
+                    if inside and not debris and not continued:
                         # extrapolate with the END-of-window velocity plus
                         # gravity sag; the straight mean-direction lead
                         # landed hits above the real impact (see
                         # evaluate_contact for the same correction)
                         g = contact_cfg["gravity"]
                         v_end = incoming * speed \
-                            + _DOWN * (g * 0.5 * vanish_approach)
+                            + _DOWN * (g * 0.5 * vanish_approach_used)
                         hit_s = s[-1] + v_end * vanish_lead \
                             + _DOWN * (0.5 * g * vanish_lead * vanish_lead)
                         hit_radius = track.radii[-1]
@@ -741,9 +876,11 @@ def main():
                    for t, q in recent_hits_s):
                 print("DUP  twin-chain duplicate of a just-sent hit, merged")
                 continue
-            # back to plain normalized game coordinates
+            # back to plain normalized game coordinates; corner hits whose
+            # extrapolated contact lands a hair outside still count (the
+            # lead/lag estimates can overshoot the projection edge)
             norm = np.array([hit_s[0] / screen_aspect, hit_s[1]])
-            if not (-0.02 <= norm[0] <= 1.02 and -0.02 <= norm[1] <= 1.02):
+            if not (-0.05 <= norm[0] <= 1.05 and -0.05 <= norm[1] <= 1.05):
                 print("DROP hit outside the game area (%.3f, %.3f)"
                       % (norm[0], norm[1]))
                 continue
