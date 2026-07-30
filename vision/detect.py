@@ -178,9 +178,18 @@ def evaluate_contact(p, f, radii, cfg):
         v_b = p[-1] - p[e]
         n_a = np.hypot(v_a[0], v_a[1])
         n_b = np.hypot(v_b[0], v_b[1])
+        out_speed = float(np.hypot(*(p[-1] - p[-2]))) / max(1, f[-1] - f[-2])
+        # A deadened ball can STICK to the soft screen instead of receding:
+        # a clearly-flying straight approach that ends in a full stop
+        # (post-turn observations pinned near the turn point, final step
+        # ~zero) is a wall contact - nothing else stops a ball mid-air.
+        stuck = (f[-1] - f[e] >= 2
+                 and speed >= 1.5 * cfg["min_speed"]
+                 and n_a <= hover_limit and n_b <= hover_limit
+                 and out_speed <= max(0.008, 0.25 * speed))
         # receding distances jitter by centroid noise; only clearly
         # SHRINKING distance disproves the recede
-        if n_a < 0.004 or n_b <= n_a - 0.005:
+        if not stuck and (n_a < 0.004 or n_b < 0.004 or n_b <= n_a - 0.005):
             fail("recede", "did not recede over two frames after the turn")
             continue
         # Contact = the trajectory BREAKS at the wall. A smooth flight
@@ -191,12 +200,11 @@ def evaluate_contact(p, f, radii, cfg):
         #   dropped   - post-impact motion is gravity: straight DOWN in
         #               screen space, while the approach was not downward
         #               (the deadened ball falling off the screen)
-        out_dir = v_b / n_b
-        cos_turn = float(v_b @ incoming) / n_b
+        out_dir = v_b / n_b if n_b > 1e-9 else v_b
+        cos_turn = float(v_b @ incoming) / max(n_b, 1e-9)
         # a turn verdict needs real displacement: a jitter-sized outgoing
         # step has no meaningful direction to have turned
         turned = cos_turn <= cfg["min_cos"] and n_b >= 0.008
-        out_speed = float(np.hypot(*(p[-1] - p[-2]))) / max(1, f[-1] - f[-2])
         last_in = float(np.hypot(*(p[e] - p[e - 1]))) / max(1, f[e] - f[e - 1])
         # Compare the outgoing speed against the approach's OWN extrapolated
         # trend: steady deceleration (perspective, drag) continues its trend
@@ -217,16 +225,16 @@ def evaluate_contact(p, f, radii, cfg):
                    and n_b >= 0.008
                    and n_b >= 1.6 * n_a
                    and float(incoming @ _DOWN) < _DROP_COS)
-        if not (turned or collapsed or dropped):
+        if not (turned or collapsed or dropped or stuck):
             fail("turn", "no bounce kink (turn %.0f deg, kept %.0f%% speed)"
                  % (np.degrees(np.arccos(np.clip(cos_turn, -1.0, 1.0))),
                     100.0 * out_speed / max(last_in, 1e-6)))
             continue
         if cfg.get("debug"):
-            print("CONTACT e=%d/%d turned=%s collapsed=%s dropped=%s "
+            print("CONTACT e=%d/%d turned=%s collapsed=%s dropped=%s stuck=%s "
                   "out=%.4f last_in=%.4f trend=%.2f horizon=%d n_a=%.4f n_b=%.4f"
-                  % (e, n, turned, collapsed, dropped, out_speed, last_in,
-                     trend, horizon, n_a, n_b))
+                  % (e, n, turned, collapsed, dropped, stuck, out_speed,
+                     last_in, trend, horizon, n_a, n_b))
         # The impact is where the incoming flight line meets the outgoing
         # (bounce or gravity-drop) line - a far better estimate than
         # extrapolating a fixed fraction of a step, because the contact
@@ -245,7 +253,9 @@ def evaluate_contact(p, f, radii, cfg):
         lag = cfg["lag"]
         hit_pos = cluster + v_end * lag + _DOWN * (0.5 * g * lag * lag)
         cross = float(in_dir[0] * out_dir[1] - in_dir[1] * out_dir[0])
-        if abs(cross) > 0.25:  # lines meet at a usable angle
+        # (a stuck ball has no outgoing line to intersect - the rest
+        # position IS the contact, so keep the cluster estimate)
+        if not stuck and abs(cross) > 0.25:  # lines meet at a usable angle
             w = p[-1] - p[e]
             t = float(w[0] * out_dir[1] - w[1] * out_dir[0]) / cross
             if -0.5 * speed <= t <= 3.0 * speed + 0.05:
@@ -495,8 +505,13 @@ def main():
         # bounce; the duplicate hit is absorbed by the cooldown.)
         # The match radius scales with the track's own speed: a slow track
         # cannot teleport onto an unrelated blob across the frame.
-        unmatched = list(range(len(detections)))
-        for track in tracks:
+        # Match globally by distance-to-prediction: the ball and its
+        # projector SHADOW fly as two parallel blob chains a few px apart,
+        # and per-track greedy matching let one chain steal the other's
+        # blob (zigzag tracks with corrupted geometry). With all candidate
+        # pairs sorted, each chain keeps its own continuation.
+        pairs = []
+        for ti, track in enumerate(tracks):
             if len(track.positions) >= 2:
                 lx, ly = track.positions[-1]
                 qx, qy = track.positions[-2]
@@ -513,19 +528,24 @@ def main():
             else:
                 pred = track.positions[-1]
                 allowed = max_match_dist
-            best, best_d = None, allowed
-            for i in unmatched:
+            for i in range(len(detections)):
                 d = np.hypot(detections[i][0][0] - pred[0],
                              detections[i][0][1] - pred[1])
-                if d < best_d:
-                    best, best_d = i, d
-            if best is not None:
-                track.add(detections[best][0], spts[best],
-                          detections[best][1], frame_idx)
-                unmatched.remove(best)
-        for i in unmatched:
-            tracks.append(Track(detections[i][0], spts[i],
-                                detections[i][1], frame_idx))
+                if d < allowed:
+                    pairs.append((d, ti, i))
+        pairs.sort(key=lambda q: q[0])
+        matched_t, matched_d = set(), set()
+        for d, ti, i in pairs:
+            if ti in matched_t or i in matched_d:
+                continue
+            tracks[ti].add(detections[i][0], spts[i],
+                           detections[i][1], frame_idx)
+            matched_t.add(ti)
+            matched_d.add(i)
+        for i in range(len(detections)):
+            if i not in matched_d:
+                tracks.append(Track(detections[i][0], spts[i],
+                                    detections[i][1], frame_idx))
 
         # retire stale tracks; print a post-mortem for any that looked like
         # a real throw but never fired, saying which gate rejected it
