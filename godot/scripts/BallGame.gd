@@ -1,6 +1,7 @@
 extends Node2D
-## The ball popup test game: a white ball appears at a random point, a
-## click (mouse or thrown ping pong ball) pops it, a new one appears.
+## Debug: the ball popup test game. A big white ball appears at a random
+## point, a hit (thrown ping pong ball or mouse click) pops it, a new one
+## appears. Used to check tracking accuracy, not to play.
 
 const BallScene := preload("res://scripts/Ball.gd")
 
@@ -36,7 +37,7 @@ func _spawn_ball() -> void:
 		randf_range(margin, vp.x - margin),
 		randf_range(margin + 60.0, vp.y - margin)
 	)
-	ball.popped.connect(_on_ball_popped)
+	ball.hit.connect(_on_ball_popped)
 	add_child(ball)
 	_ball = ball
 

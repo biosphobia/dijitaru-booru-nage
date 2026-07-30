@@ -1,19 +1,27 @@
 extends Node2D
-## Main menu / mode manager. Two modes:
-##   Ball Game    - the ball popup test game (BallGame.gd)
+## Root: runs the game, and hides the development modes behind a debug mode.
+##
+## The game (Game.gd) is what the wall shows and is played entirely by
+## throwing balls. Pressing D opens the debug mode, whose menu holds the two
+## development modes:
+##   Ball Game    - the ball popup accuracy test (BallGame.gd)
 ##   Model Studio - photo capture -> Meshy 3D model (ModelStudio.gd)
 ##
 ## Every hit leaves a fading mark at the detected position: colored like the
 ## thrown ball (light blue / orange) and sized like its projected image, so
 ## you can check tracking accuracy against the real impact spot. Plain mouse
-## clicks leave a small white mark.
+## clicks leave a small white mark. The mark shows the raw impact - the
+## click itself is snapped to a nearby target by BallInput.
 ##
 ## Keys:
-##   1 / 2  - pick a mode from the menu
-##   Escape - back to menu (from a mode), quit (from the menu)
+##   D      - toggle the debug mode (and back out of a debug mode)
+##   1 / 2  - pick a mode in the debug menu
+##   Escape - back one step, quit from the game's title screen
 ##   C      - toggle the calibration pattern
 ##   F      - toggle fullscreen
 
+const GameScene := preload("res://scripts/Game.gd")
+const DebugMenuScene := preload("res://scripts/DebugMenu.gd")
 const BallGameScene := preload("res://scripts/BallGame.gd")
 const ModelStudioScene := preload("res://scripts/ModelStudio.gd")
 const CalibrationScene := preload("res://scripts/CalibrationScreen.gd")
@@ -24,8 +32,9 @@ const MARK_COLORS := {
 	"orange": Color(1.0, 0.55, 0.15),
 }
 
-var _menu: CanvasLayer
-var _mode: Node = null
+var _game: Node2D
+var _debug_menu: Node2D = null
+var _debug_mode: Node = null
 var _calibration: CanvasLayer
 var _link_label: Label
 
@@ -33,36 +42,16 @@ func _ready() -> void:
 	var bg := ColorRect.new()
 	bg.color = BACKGROUND
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	# a Control that takes the mouse swallows the click before it reaches
+	# the targets' picking - the backdrop must stay out of the way
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var bg_layer := CanvasLayer.new()
 	bg_layer.layer = -1
 	bg_layer.add_child(bg)
 	add_child(bg_layer)
 
-	_menu = CanvasLayer.new()
-	var box := VBoxContainer.new()
-	box.set_anchors_preset(Control.PRESET_CENTER)
-	box.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	box.grow_vertical = Control.GROW_DIRECTION_BOTH
-	box.add_theme_constant_override("separation", 18)
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	_menu.add_child(box)
-
-	var title := Label.new()
-	title.text = "デジタルボール投げ"
-	title.add_theme_font_size_override("font_size", 72)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(title)
-
-	box.add_child(_menu_button("ボールゲーム (1)", func() -> void: _start_mode(BallGameScene)))
-	box.add_child(_menu_button("モデルスタジオ (2)", func() -> void: _start_mode(ModelStudioScene)))
-
-	var hint := Label.new()
-	hint.text = "C: キャリブレーション　F: 全画面　Esc: 戻る"
-	hint.add_theme_font_size_override("font_size", 24)
-	hint.modulate = Color(1, 1, 1, 0.6)
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(hint)
-	add_child(_menu)
+	_game = GameScene.new()
+	add_child(_game)
 
 	_calibration = CalibrationScene.new()
 	_calibration.visible = false
@@ -100,26 +89,68 @@ func _update_link() -> void:
 	else:
 		_link_label.text = ""
 
-func _menu_button(text: String, on_pressed: Callable) -> Button:
-	var button := Button.new()
-	button.text = text
-	button.custom_minimum_size = Vector2(480, 88)
-	button.add_theme_font_size_override("font_size", 38)
-	button.pressed.connect(on_pressed)
-	return button
+# -- debug mode ------------------------------------------------------------
 
-func _start_mode(scene: GDScript) -> void:
-	if _mode != null:
+func _toggle_debug() -> void:
+	if _debug_mode != null:
+		_close_debug_mode()
+	elif _debug_menu != null:
+		_close_debug()
+	else:
+		_open_debug()
+
+func _open_debug() -> void:
+	_set_active(_game, false)
+	_debug_menu = DebugMenuScene.new()
+	_debug_menu.mode_selected.connect(_start_debug_mode)
+	_debug_menu.closed.connect(_close_debug)
+	add_child(_debug_menu)
+
+func _close_debug() -> void:
+	_close_debug_mode()
+	if _debug_menu != null:
+		_debug_menu.queue_free()
+		_debug_menu = null
+	_set_active(_game, true)
+
+func _start_debug_mode(id: String) -> void:
+	if _debug_mode != null:
 		return
-	_menu.visible = false
-	_mode = scene.new()
-	add_child(_mode)
+	_set_active(_debug_menu, false)
+	_debug_mode = (BallGameScene if id == "ball" else ModelStudioScene).new()
+	add_child(_debug_mode)
 
-func _back_to_menu() -> void:
-	if _mode != null:
-		_mode.queue_free()
-		_mode = null
-	_menu.visible = true
+## Back out of a running debug mode to the debug menu.
+func _close_debug_mode() -> void:
+	if _debug_mode == null:
+		return
+	_debug_mode.queue_free()
+	_debug_mode = null
+	_set_active(_debug_menu, true)
+
+## Hide a branch and stop it processing, so its targets stop taking hits
+## (BallTarget.is_ball_active checks both). CanvasLayers ignore their
+## parent's visibility, so they are hidden separately.
+func _set_active(node: Node, active: bool) -> void:
+	if node == null:
+		return
+	if node.has_method("set_active"):
+		node.set_active(active)
+		return
+	if node is CanvasItem:
+		node.visible = active
+	for layer in node.find_children("*", "CanvasLayer", true, false):
+		layer.visible = active
+	node.process_mode = Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
+
+func _current_branch() -> Node:
+	if _debug_mode != null:
+		return _debug_mode
+	if _debug_menu != null:
+		return _debug_menu
+	return _game
+
+# -- input -----------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
 	# ball hits draw their mark via the ball_hit signal; this only covers
@@ -132,22 +163,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		match event.keycode:
 			KEY_C:
 				_calibration.visible = not _calibration.visible
-				if _mode != null:
-					_mode.set_process(not _calibration.visible)
+				_set_active(_current_branch(), not _calibration.visible)
 			KEY_F:
 				_toggle_fullscreen()
+			KEY_D:
+				if not _calibration.visible:
+					_toggle_debug()
 			KEY_1:
-				if _menu.visible:
-					_start_mode(BallGameScene)
+				if _debug_menu != null and _debug_mode == null:
+					_start_debug_mode("ball")
 			KEY_2:
-				if _menu.visible:
-					_start_mode(ModelStudioScene)
+				if _debug_menu != null and _debug_mode == null:
+					_start_debug_mode("studio")
 			KEY_ESCAPE:
 				if _calibration.visible:
 					_calibration.visible = false
-				elif _mode != null:
-					_back_to_menu()
-				else:
+					_set_active(_current_branch(), true)
+				elif _debug_mode != null:
+					_close_debug_mode()
+				elif _debug_menu != null:
+					_close_debug()
+				elif not _game.on_back():
 					get_tree().quit()
 
 ## Fading mark wherever a hit landed - colored and sized like the thrown

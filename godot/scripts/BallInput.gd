@@ -84,14 +84,47 @@ func _process(_delta: float) -> void:
 			r_frac = DEFAULT_RADIUS_FRAC
 		var radius_px := r_frac * vp.x
 		var color := str(data.get("color", "unknown"))
+		# The mark shows where the ball really landed (tracking accuracy);
+		# the click is snapped to the target the throw was aiming at.
 		ball_hit.emit(pos, color, radius_px)
-		_send_click(pos, color, radius_px)
+		var target := pick_target(pos)
+		if target != null:
+			# Tell the target directly: a throw must never be swallowed by
+			# whatever Control happens to sit under the impact point.
+			pos = target.ball_center()
+			target.take()
+		_send_click(pos, color, radius_px, target != null)
+
+## Throws land off the aim point, so a hit near a target counts as a hit on
+## it: the target whose hit area covers the impact wins (the closest one
+## relative to its own size when several do). Nodes in the `ball_targets`
+## group opt in by providing ball_center() / ball_hit_radius() /
+## is_ball_active() / take() - see BallTarget.gd. Returns null when the
+## impact is not near any target.
+func pick_target(pos: Vector2) -> Node:
+	var best: Node = null
+	var best_score := 1.0
+	for node in get_tree().get_nodes_in_group("ball_targets"):
+		if not node.has_method("ball_hit_radius") or not node.has_method("is_ball_active"):
+			continue
+		if not node.is_ball_active():
+			continue
+		var radius: float = node.ball_hit_radius()
+		if radius <= 0.0:
+			continue
+		var score: float = node.ball_center().distance_to(pos) / radius
+		if score <= best_score:
+			best_score = score
+			best = node
+	return best
 
 ## Synthesize a left-click press+release so anything that reacts to normal
 ## mouse clicks (buttons, Area2D input_event, _unhandled_input) just works.
 ## Ball info rides along as event metadata so the game can draw the hit
-## mark in the ball's color and at its real projected size.
-func _send_click(pos: Vector2, color: String, radius_px: float) -> void:
+## mark in the ball's color and at its real projected size. `dispatched`
+## marks a hit a target already took, so no second target picks it up.
+func _send_click(pos: Vector2, color: String, radius_px: float,
+		dispatched := false) -> void:
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.pressed = true
@@ -99,6 +132,8 @@ func _send_click(pos: Vector2, color: String, radius_px: float) -> void:
 	press.global_position = pos
 	press.set_meta("ball_color", color)
 	press.set_meta("ball_radius_px", radius_px)
+	if dispatched:
+		press.set_meta("ball_dispatched", true)
 	Input.parse_input_event(press)
 
 	var release := InputEventMouseButton.new()

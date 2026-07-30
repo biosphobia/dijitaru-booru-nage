@@ -2,14 +2,30 @@
 
 Throw ping pong balls at a wall, hit targets in a projected Godot game.
 
-The game opens on a menu with two modes:
+The game is played entirely by throwing — there is nothing to click. It
+opens on a title screen whose **スタート** target starts a 60 second round:
+targets pop up on the wall, each hit scores, consecutive hits build a
+multiplier, and the result screen offers **もういちど** / **タイトル** as
+targets too. The high score is kept between sessions.
 
-- **Ball Game** — the ball popup test game (throw a ball, pop the target).
-- **Model Studio** — photograph a person from up to 4 angles with the
-  tracking camera and turn them into a **rigged 3D model** via
+Every target has a hit area noticeably larger than the circle you see (the
+faint halo around it) to absorb throw and tracking error, and a hit is
+awarded to the target it lands nearest — so a throw only has to be close.
+
+### Debug mode (press **D**)
+
+The two development modes live behind **D**, out of the way of players:
+
+- **Ball Game** (「ボール」) — the ball popup test game (throw a ball, pop
+  the target). Useful for checking tracking accuracy.
+- **Model Studio** (「スタジオ」) — photograph a person from up to 4 angles
+  with the tracking camera and turn them into a **rigged 3D model** via
   [Meshy.ai](https://www.meshy.ai), with live progress and a rotating 3D
   preview in-game. Models are stored in your Meshy cloud account, so they
   survive the game being closed; the newest one is also cached locally.
+
+The debug menu is throwable as well (「もどる」 leaves it); **D** also backs
+out of a running debug mode, and **1** / **2** pick one from the keyboard.
 
 A webcam watches the projected image. A Python script detects ball impacts
 (a fast round blob whose direction suddenly reverses = a bounce off the
@@ -24,10 +40,10 @@ webcam -> vision/detect.py -> UDP {"type":"hit","x":0.42,"y":0.61,"color":"red"}
 
 ## Parts
 
-- `godot/` — Godot 4.5 project: the test game (a white ball appears at a
-  random point on a blue background; a hit pops it and a new one appears),
-  the calibration pattern screen, and the `BallInput.gd` autoload that
-  receives hits.
+- `godot/` — Godot 4.5 project: the game (`Game.gd`), the debug mode
+  (`DebugMenu.gd` + `BallGame.gd` / `ModelStudio.gd`), the throwable target
+  (`BallTarget.gd`), the calibration pattern screen, and the `BallInput.gd`
+  autoload that receives hits.
 - `vision/` — Python: `calibrate.py` (homography calibration),
   `detect.py` (ball tracker), `test_hit.py` (send a fake hit, no camera needed).
 
@@ -131,8 +147,8 @@ a ball merely flying across the projection does nothing. Each impact
 prints `HIT {...}` in the terminal and clicks the game at that spot: a
 mark in the ball's color (light blue / orange) and at the ball's real
 projected size appears there and fades out, so you can compare it
-against where the ball actually struck. If it hit the white game ball,
-that pops and a new one appears.
+against where the ball actually struck — the mark always shows the raw
+impact point, even when the hit was awarded to a target next to it.
 
 No camera handy? Test the game side alone:
 
@@ -150,8 +166,8 @@ One-time setup: get an API key from
 "meshy": { "api_key": "msy-...", "ai_model": "latest", "rig": true, "height_meters": 1.7 }
 ```
 
-Then, with the camera tool running (`detect`), pick **Model Studio** in
-the game menu:
+Then, with the camera tool running (`detect`), press **D** and pick
+**スタジオ**:
 
 1. A live camera viewfinder shows in the game. Stand in front of the
    camera and click 「撮影」 for 1–4 angles (front / side / back work
@@ -222,8 +238,22 @@ needs the API key.
 ## Making your own game
 
 Build it in `godot/` against plain mouse clicks — targets, buttons,
-`_unhandled_input`, whatever. Ball hits arrive as real clicks. If you want
-the ball color (team play!), connect to the autoload's signal instead:
+`_unhandled_input`, whatever. Ball hits arrive as real clicks. For anything
+a player has to hit, use `BallTarget` instead of a `Button`: it is a round
+target with built-in throw slack (`TOLERANCE_FRAC`, ~6% of screen width on
+top of its radius), and hits are routed to the nearest one:
+
+```gdscript
+var target := BallTarget.new()
+target.position = Vector2(640, 400)
+target.radius = 110.0
+target.label_text = "スタート"
+target.hit.connect(func() -> void: print("hit!"))
+add_child(target)
+```
+
+If you want the ball color (team play!), connect to the autoload's signal
+instead:
 
 ```gdscript
 BallInput.ball_hit.connect(func(pos: Vector2, color: String, radius_px: float):
