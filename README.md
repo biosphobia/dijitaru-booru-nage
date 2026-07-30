@@ -104,12 +104,20 @@ to `1280`/`720` and `fourcc` to `"MJPG"` in `config.json` so it can reach
 
 ## Calibrate (do this once per setup)
 
-1. In the running game, press **C** — the screen turns white with four
-   square markers.
-2. Run `python vision/calibrate.py`. A camera preview opens; when all four
-   markers are detected the border turns green.
-3. Press **SPACE** to save (`vision/calibration.json`), then press **C** in
-   the game to return.
+1. In the running game, press **C** — the screen turns white with a 4x3
+   grid of square markers.
+2. Run `python vision/calibrate.py`. A camera preview opens and collects
+   marker observations over time — markers only need to be spotted now
+   and then, not in every frame. Green dots mark locked markers; the
+   border turns green once enough are locked (6 of 12 suffice, more =
+   more accurate).
+3. Press **SPACE** to save (`vision/calibration.json`), **R** to restart
+   collecting, then press **C** in the game to return.
+
+The fit combines a perspective homography with a spline correction
+measured at each marker, so it stays accurate from low camera angles and
+on keystoned or slightly curved screens. If you move the camera or
+projector even a little, recalibrate — it only takes a few seconds.
 
 ## Play
 

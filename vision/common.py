@@ -56,14 +56,17 @@ DEFAULT_CONFIG = {
     ],
 }
 
-# Normalized game-screen coordinates of the four ArUco marker CENTERS shown
-# by the Godot calibration screen (godot/scripts/CalibrationScreen.gd).
-# Must stay in sync with that file.
+# 4x3 grid of ArUco markers (ids 0-11, row-major) shown by the Godot
+# calibration screen. Many well-spread points make the mapping accurate
+# from low camera angles and on distorted screens, and calibration still
+# works when only part of the grid is detected.
+# Must stay in sync with godot/scripts/CalibrationScreen.gd.
+GRID_XS = [0.14, 0.38, 0.62, 0.86]
+GRID_YS = [0.15, 0.50, 0.85]
 MARKER_CENTERS = {
-    0: (0.1, 0.1),  # top-left
-    1: (0.9, 0.1),  # top-right
-    2: (0.9, 0.9),  # bottom-right
-    3: (0.1, 0.9),  # bottom-left
+    row * len(GRID_XS) + col: (GRID_XS[col], GRID_YS[row])
+    for row in range(len(GRID_YS))
+    for col in range(len(GRID_XS))
 }
 
 ARUCO_DICT = cv2.aruco.DICT_4X4_50
@@ -87,11 +90,14 @@ def update_meshy_config(updates):
     return cfg
 
 
-def save_calibration(homography, frame_size):
+def save_calibration(homography, frame_size, control_src=None, control_dst=None):
     data = {
         "homography": np.asarray(homography).tolist(),
         "frame_size": list(frame_size),  # [width, height] used at calibration time
     }
+    if control_src is not None:
+        data["control_src"] = np.asarray(control_src).tolist()  # camera px
+        data["control_dst"] = np.asarray(control_dst).tolist()  # normalized screen
     with open(CALIBRATION_PATH, "w") as f:
         json.dump(data, f, indent=2)
     return CALIBRATION_PATH
@@ -105,7 +111,89 @@ def load_calibration():
         )
     with open(CALIBRATION_PATH) as f:
         data = json.load(f)
-    return np.array(data["homography"], dtype=np.float64), tuple(data["frame_size"])
+    return CalibrationMapper(
+        np.array(data["homography"], dtype=np.float64),
+        tuple(data["frame_size"]),
+        data.get("control_src"),
+        data.get("control_dst"),
+    )
+
+
+def _tps_kernel(r2):
+    """Thin-plate spline kernel r^2 log r, as a function of squared radius."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        k = 0.5 * r2 * np.log(r2)
+    return np.where(np.isfinite(k), k, 0.0)
+
+
+class CalibrationMapper:
+    """Camera pixels -> normalized game coordinates.
+
+    A RANSAC homography carries the perspective (works from any camera
+    angle on a flat screen); a thin-plate spline over the calibration
+    control points smoothly corrects whatever the homography cannot
+    express (keystone correction artifacts, curved walls, lens
+    distortion). With no control points it is a plain homography.
+    """
+
+    def __init__(self, homography, frame_size, control_src=None, control_dst=None,
+                 smoothing=1e-6):
+        self.homography = np.asarray(homography, dtype=np.float64)
+        self.frame_size = tuple(frame_size)
+        self._tps = None
+        if control_src is not None and len(control_src) >= 6:
+            src = np.asarray(control_src, dtype=np.float64).reshape(-1, 2)
+            dst = np.asarray(control_dst, dtype=np.float64).reshape(-1, 2)
+            base = cv2.perspectiveTransform(
+                src.reshape(-1, 1, 2), self.homography).reshape(-1, 2)
+            residual = dst - base
+            if np.max(np.abs(residual)) > 1e-9:
+                self._tps = self._fit_tps(src, residual, smoothing)
+
+    def _norm(self, pts_px):
+        return pts_px / np.asarray(self.frame_size, dtype=np.float64)
+
+    def _fit_tps(self, src_px, residual, lam):
+        pts = self._norm(src_px)
+        n = len(pts)
+        d2 = ((pts[:, None, :] - pts[None, :, :]) ** 2).sum(-1)
+        K = _tps_kernel(d2) + lam * np.eye(n)
+        P = np.hstack([np.ones((n, 1)), pts])
+        A = np.zeros((n + 3, n + 3))
+        A[:n, :n] = K
+        A[:n, n:] = P
+        A[n:, :n] = P.T
+        b = np.zeros((n + 3, 2))
+        b[:n] = residual
+        return pts, np.linalg.solve(A, b)
+
+    def _tps_eval(self, pts_px):
+        ctrl, w = self._tps
+        q = self._norm(pts_px)
+        d2 = ((q[:, None, :] - ctrl[None, :, :]) ** 2).sum(-1)
+        return _tps_kernel(d2) @ w[:len(ctrl)] \
+            + np.hstack([np.ones((len(q), 1)), q]) @ w[len(ctrl):]
+
+    def map_points(self, points_px, frame_size):
+        """Map camera pixels (at the given capture size) to normalized game
+        coordinates, rescaling to the calibration-time capture size first."""
+        pts = np.asarray(points_px, dtype=np.float64).reshape(-1, 2).copy()
+        pts[:, 0] *= self.frame_size[0] / frame_size[0]
+        pts[:, 1] *= self.frame_size[1] / frame_size[1]
+        out = cv2.perspectiveTransform(pts.reshape(-1, 1, 2), self.homography).reshape(-1, 2)
+        if self._tps is not None:
+            out = out + self._tps_eval(pts)
+        return out
+
+    def game_polygon_px(self, frame_size):
+        """The projected game rectangle's outline in current-camera pixels
+        (preview drawing only - homography approximation)."""
+        unit = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float64).reshape(-1, 1, 2)
+        inv = np.linalg.inv(self.homography)
+        pts = cv2.perspectiveTransform(unit, inv).reshape(-1, 2)
+        pts[:, 0] *= frame_size[0] / self.frame_size[0]
+        pts[:, 1] *= frame_size[1] / self.frame_size[1]
+        return pts.astype(np.int32)
 
 
 def open_camera(config):
@@ -143,27 +231,16 @@ def open_camera(config):
     return cam
 
 
-def camera_to_game(points_px, homography, frame_size, calib_frame_size):
-    """Map camera pixel coordinates -> normalized game coordinates [0,1].
-
-    Handles the current capture resolution differing from the resolution the
-    calibration was made at by rescaling first.
-    """
-    pts = np.asarray(points_px, dtype=np.float64).reshape(-1, 1, 2)
-    sx = calib_frame_size[0] / frame_size[0]
-    sy = calib_frame_size[1] / frame_size[1]
-    pts[:, 0, 0] *= sx
-    pts[:, 0, 1] *= sy
-    out = cv2.perspectiveTransform(pts, homography)
-    return out.reshape(-1, 2)
-
-
-def game_area_polygon_px(homography, calib_frame_size, frame_size):
-    """The projected game rectangle's outline in current-camera pixels
-    (for drawing on the preview)."""
-    unit = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float64).reshape(-1, 1, 2)
-    inv = np.linalg.inv(homography)
-    pts = cv2.perspectiveTransform(unit, inv).reshape(-1, 2)
-    pts[:, 0] *= frame_size[0] / calib_frame_size[0]
-    pts[:, 1] *= frame_size[1] / calib_frame_size[1]
-    return pts.astype(np.int32)
+def aruco_detector():
+    """ArUco detector tuned for easy but accurate pickup: wide adaptive
+    threshold sweep and low perimeter floor find small/skewed markers at
+    low camera angles; sub-pixel corner refinement keeps them accurate."""
+    params = cv2.aruco.DetectorParameters()
+    params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    params.adaptiveThreshWinSizeMin = 3
+    params.adaptiveThreshWinSizeMax = 45
+    params.adaptiveThreshWinSizeStep = 4
+    params.minMarkerPerimeterRate = 0.01
+    params.errorCorrectionRate = 0.8
+    return cv2.aruco.ArucoDetector(
+        cv2.aruco.getPredefinedDictionary(ARUCO_DICT), params)

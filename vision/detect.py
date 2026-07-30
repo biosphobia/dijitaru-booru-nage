@@ -20,13 +20,7 @@ from collections import deque
 import cv2
 import numpy as np
 
-from common import (
-    load_config,
-    load_calibration,
-    open_camera,
-    camera_to_game,
-    game_area_polygon_px,
-)
+from common import load_config, load_calibration, open_camera
 from studio import MeshyStudio
 
 
@@ -91,11 +85,11 @@ def main():
     # The camera, the Model Studio and the live viewfinder must work
     # without it, so start anyway and just disable hit detection.
     try:
-        homography, calib_size = load_calibration()
+        mapper = load_calibration()
     except SystemExit as e:
         print("WARNING: %s" % e)
         print("Running WITHOUT hit detection (camera + Model Studio only).")
-        homography, calib_size = None, None
+        mapper = None
     cam = open_camera(config)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -109,7 +103,7 @@ def main():
         config, lambda event: sock.sendto(json.dumps(event).encode("utf-8"), udp_addr)
     )
     # reported to the game via pong events so it can show tracking state
-    studio.calibrated = homography is not None
+    studio.calibrated = mapper is not None
 
     det = config.get("detection", {})
     proc_width = det.get("processing_width", 640)
@@ -165,7 +159,7 @@ def main():
         scale = proc_width / float(w)
         small = cv2.resize(frame, (proc_width, int(h * scale)))
 
-        if homography is None:
+        if mapper is None:
             # uncalibrated: camera + studio only, no hit detection
             if preview:
                 cv2.putText(small, "NO CALIBRATION - hits disabled", (10, 25),
@@ -179,9 +173,7 @@ def main():
         gray = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
 
         if game_poly is None:
-            game_poly = game_area_polygon_px(
-                homography, calib_size, (small.shape[1], small.shape[0])
-            )
+            game_poly = mapper.game_polygon_px((small.shape[1], small.shape[0]))
 
         if prev_gray is None:
             prev_gray = gray
@@ -265,9 +257,9 @@ def main():
 
             # Transform the hit point plus a point one ball-radius away, so
             # the game can draw the mark at the ball's real projected size.
-            mapped = camera_to_game(
+            mapped = mapper.map_points(
                 [hit_pos, (hit_pos[0] + hit_radius, hit_pos[1])],
-                homography, (small.shape[1], small.shape[0]), calib_size,
+                (small.shape[1], small.shape[0]),
             )
             norm = mapped[0]
             r_norm = float(np.hypot(*(mapped[1] - mapped[0])))  # fraction of screen width-ish
