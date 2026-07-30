@@ -26,7 +26,7 @@ const GROW_TIME := 0.18
 var radius := 120.0
 var label_text := ""
 var color := Color(0.98, 0.98, 0.95)
-var text_color := Color(0.06, 0.14, 0.36)
+var text_color := Color(0.04, 0.06, 0.14)
 var font_size := 40
 ## Seconds before the target leaves on its own (0 = stays until hit).
 var lifetime := 0.0
@@ -127,12 +127,15 @@ func _vanish(end_scale: float) -> void:
 
 func _draw() -> void:
 	var r := radius * (1.0 + 0.02 * sin(_age * 3.5))
-	# faint halo showing the throw slack around the target
-	draw_circle(Vector2.ZERO, hit_radius(), Color(color.r, color.g, color.b, 0.09))
+	# halo showing the throw slack, plus a hard rim: everything has to read
+	# across a bright room, where low-contrast edges disappear
+	draw_circle(Vector2.ZERO, hit_radius(), Color(color.r, color.g, color.b, 0.18))
+	draw_arc(Vector2.ZERO, hit_radius(), 0.0, TAU, 64,
+		Color(color.r, color.g, color.b, 0.5), 3.0)
 	draw_circle(Vector2.ZERO, r, color)
-	draw_circle(Vector2.ZERO, r * 0.74, color.darkened(0.14))
+	draw_circle(Vector2.ZERO, r * 0.74, color.darkened(0.18))
 	draw_circle(Vector2.ZERO, r * 0.42, color)
-	draw_arc(Vector2.ZERO, r, 0.0, TAU, 64, color.darkened(0.4), 4.0)
+	draw_arc(Vector2.ZERO, r, 0.0, TAU, 64, color.darkened(0.5), 6.0)
 	if lifetime > 0.0:
 		var frac := clampf(_left / lifetime, 0.0, 1.0)
 		draw_arc(Vector2.ZERO, r + 14.0, -PI / 2.0, -PI / 2.0 + TAU * frac, 64,

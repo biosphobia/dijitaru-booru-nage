@@ -21,7 +21,7 @@ class Starfield extends Node2D:
 	func _resize() -> void:
 		_size = get_viewport_rect().size
 		_stars.clear()
-		for i in 140:
+		for i in 90:
 			_stars.append(Vector3(
 				randf() * _size.x, randf() * _size.y, randf_range(6.0, 34.0)))
 
@@ -40,10 +40,11 @@ class Starfield extends Node2D:
 		if _bg != null:
 			draw_texture_rect(_bg, Rect2(Vector2.ZERO, _size), false)
 			return
+		# bright and chunky: thin dim stars vanish on a lit-room projection
 		for s in _stars:
-			var bright := 0.25 + s.z / 46.0
-			draw_circle(Vector2(s.x, s.y), 1.0 + s.z / 22.0,
-				Color(0.75, 0.85, 1.0, bright))
+			var bright := 0.55 + s.z / 60.0
+			draw_circle(Vector2(s.x, s.y), 1.6 + s.z / 16.0,
+				Color(0.85, 0.92, 1.0, bright))
 
 ## Expanding burst where an alien died.
 class Explosion extends Node2D:

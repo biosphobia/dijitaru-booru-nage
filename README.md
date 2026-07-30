@@ -2,27 +2,33 @@
 
 Throw ping pong balls at a wall, hit targets in a projected Godot game.
 
-**スペースボール投げ** — you are inside a spaceship and aliens are drifting
+**デジタルボール投げ** — you are inside a spaceship and aliens are drifting
 down towards you. A **blue** ball damages the alien it lands nearest; an
 **orange** ball is a fireball that detonates and clears the screen. Clear a
-wave, collect coins, and every third wave choose one of two upgrades. Coins
-are the payout: at a stall they buy sweets.
+level, collect coins, and every third level choose one of two upgrades.
+Coins are the payout: at a stall they buy sweets.
 
 The whole game is played by throwing — there is nothing to click, not even
 to start. Every target has a hit area noticeably larger than the circle you
-see (the thin ring around it) to absorb throw and tracking error, and a hit
-goes to the target it lands nearest, so a throw only has to be close.
+see (the ring around it) to absorb throw and tracking error, and a hit goes
+to the target it lands nearest, so a throw only has to be close.
 
-- **Waves** grow from a points budget, so they never run out. New alien
-  types unlock as you go: fast little ones, armoured ones that need three
-  hits, splitters, shielded ones, and a boss every fifth wave.
+It is drawn for a **room with the lights on**: big bright shapes with hard
+white outlines on a dark background, short labels in large type, and no
+faint detail — a projector cannot draw black, so anything low-contrast
+disappears the moment the room is not dark.
+
+- **Levels** (「レベル」 on screen, `waves.*` in the tuning file) grow from a
+  points budget, so they never run out. New alien types unlock as you go:
+  fast little ones, armoured ones that need three hits, splitters,
+  shielded ones, and a boss every fifth level.
 - **Hull**: five hits. An alien that reaches the ship costs one; the run
   ends when the hull is gone, and the result screen shows the coin total in
   large type for whoever is paying out.
 - **Fireballs**: the player starts with 5 orange balls. Some upgrades hand
   over 2 more — the game announces 「オレンジ球 +2」 full-screen so the
   person running the stall knows to pass them over.
-- **Upgrades** every third wave, two to choose between, thrown at like
+- **Upgrades** every third level, two to choose between, thrown at like
   anything else. Later choices get stronger: wider hit areas and repairs
   early, then double damage, chain hits and slow fields, then an auto
   turret, a fever blast every eighth hit, a one-shot revive, double coins.
@@ -59,7 +65,7 @@ webcam -> vision/detect.py -> UDP {"type":"hit","x":0.42,"y":0.61,"color":"red"}
 
 ## Parts
 
-- `godot/` — Godot 4.5 project. The game is `Game.gd` (waves, coins, hull,
+- `godot/` — Godot 4.5 project. The game is `Game.gd` (levels, coins, hull,
   screens) with `Enemy.gd`, `Upgrades.gd` and `Effects.gd`; `BallTarget.gd`
   is the throwable target everything else is built from. `GameAssets.gd`
   and `Tuning.gd` are the autoloads that read `game_assets/` and
@@ -218,20 +224,21 @@ about is fine, and a typo can never delete a setting. Press **R** on the
 title screen to reload it without closing the game — that is the knob to
 turn between customers.
 
-The ones worth knowing on the day:
+The ones worth knowing on the day (the `waves.*` group is what the screen
+calls 「レベル」):
 
 | key | what it does |
 | --- | --- |
 | `run.hull` | hits the ship survives (5) |
 | `run.fireballs` | orange balls the player starts with (5) |
-| `run.upgrade_every` | a choice of upgrades every N waves (3) |
+| `run.upgrade_every` | a choice of upgrades every N levels (3) |
 | `coins.multiplier` | scales every payout at once — the prize dial |
-| `waves.budget_base` / `budget_per_wave` | how many aliens wave 1 has, and how fast that grows |
-| `waves.cross_time_start` / `_step` / `_min` | seconds an alien takes to reach the ship, and how much faster each wave gets |
+| `waves.budget_base` / `budget_per_wave` | how many aliens level 1 has, and how fast that grows |
+| `waves.cross_time_start` / `_step` / `_min` | seconds an alien takes to reach the ship, and how much faster each level gets |
 | `waves.max_alive_start` / `_max` | how many can be on screen at once |
-| `waves.boss_every` | boss wave every N waves (0 = never) |
+| `waves.boss_every` | boss level every N levels (0 = never) |
 | `aim.tolerance` | throw slack, as a fraction of screen width (0.06 ≈ 77 px at 1280) — raise it if the room is unforgiving |
-| `enemies.<type>` | per-alien hp, radius, coins, speed, and which wave it first appears in |
+| `enemies.<type>` | per-alien hp, radius, coins, speed, and which level it first appears in |
 
 **Too hard for the queue?** Raise `run.hull`, raise `aim.tolerance`, raise
 `waves.cross_time_start`. **Paying out too much candy?** Lower
@@ -242,14 +249,14 @@ The ones worth knowing on the day:
 Measured against a simulated player throwing every 2.4 s with realistic aim
 error, on the shipped defaults:
 
-| wave | 1–5 | 6 | 7 | 8 |
+| level | 1–5 | 6 | 7 | 8 |
 | --- | --- | --- | --- | --- |
 | hull left (of 5) | 5 | 3 | 2 | 2 |
 | coins | 49 | 79 | 118 | 118+ |
 
-So: nothing gets through for the first five waves, the pressure starts at
-wave 6, and a run ends around wave 9 — about 3½ minutes, ~130 coins. A
-first-timer throwing more slowly will end around wave 5–6 with 40–60.
+So: nothing gets through for the first five levels, the pressure starts at
+level 6, and a run ends around level 9 — about 3½ minutes, ~130 coins. A
+first-timer throwing more slowly will end around level 5–6 with 40–60.
 Pick the prize exchange rate from that, and use `coins.multiplier` to move
 every payout at once rather than editing each alien.
 

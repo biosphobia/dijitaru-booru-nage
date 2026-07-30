@@ -131,10 +131,10 @@ func _type_color() -> Color:
 		_: return Color(0.65, 0.85, 0.4)
 
 func _draw() -> void:
-	# throw slack, as a thin ring: a filled disc reads as a dirty shadow
-	# against the black of space
+	# throw slack, as a bright ring: a filled disc reads as a dirty shadow
+	# against space, and anything faint disappears in a lit room
 	draw_arc(Vector2.ZERO, hit_radius(), 0.0, TAU, 48,
-		Color(color.r, color.g, color.b, 0.16), 2.0)
+		Color(color.r, color.g, color.b, 0.45), 3.0)
 	var body := color
 	if _flash > 0.0:
 		body = color.lerp(Color.WHITE, _flash / 0.2)
@@ -144,14 +144,17 @@ func _draw() -> void:
 			false, Color(1, 1, 1, 1).lerp(Color.WHITE, _flash / 0.2))
 	else:
 		_draw_alien(body)
+	# hard outline: the alien has to hold its shape against a washed-out
+	# projection, where mid-tones collapse into the background
+	draw_arc(Vector2.ZERO, radius, 0.0, TAU, 48, Color.WHITE, 4.0)
 	if shielded:
 		draw_arc(Vector2.ZERO, radius * 1.18, PI * 0.15, PI * 0.85, 32,
-			Color(SHIELD_COLOR.r, SHIELD_COLOR.g, SHIELD_COLOR.b, 0.9), 7.0)
+			SHIELD_COLOR, 9.0)
 	# close to the hull: ring the alarm so the player knows what to hit next
 	if position.y > ship_y - radius * 2.4:
 		var pulse := 0.5 + 0.5 * sin(_age * 9.0)
 		draw_arc(Vector2.ZERO, radius * 1.3, 0.0, TAU, 40,
-			Color(1.0, 0.25, 0.2, 0.35 + 0.5 * pulse), 6.0)
+			Color(1.0, 0.2, 0.15, 0.55 + 0.45 * pulse), 9.0)
 	if max_hp > 1:
 		_draw_hp()
 
@@ -184,9 +187,10 @@ func _draw_alien(body: Color) -> void:
 			Color(0.1, 0.05, 0.1), r * 0.09)
 
 func _draw_hp() -> void:
-	var w := radius * 1.5
-	var y := -radius - 22.0
+	var w := radius * 1.7
+	var h := maxf(16.0, radius * 0.16)
+	var y := -radius - h - 12.0
 	var frac := clampf(float(hp) / float(max_hp), 0.0, 1.0)
-	draw_rect(Rect2(-w / 2.0, y, w, 12.0), Color(0, 0, 0, 0.45))
-	draw_rect(Rect2(-w / 2.0, y, w * frac, 12.0), Color(1.0, 0.35, 0.3))
-	draw_rect(Rect2(-w / 2.0, y, w, 12.0), Color(1, 1, 1, 0.5), false, 2.0)
+	draw_rect(Rect2(-w / 2.0, y, w, h), Color(0.1, 0.1, 0.15))
+	draw_rect(Rect2(-w / 2.0, y, w * frac, h), Color(1.0, 0.3, 0.25))
+	draw_rect(Rect2(-w / 2.0, y, w, h), Color.WHITE, false, 3.0)

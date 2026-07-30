@@ -233,7 +233,7 @@ func _next_wave() -> void:
 	_wave_escapes = 0
 	_intro_left = float(Tuning.n("waves.intro_seconds", 2.0))
 	state = State.INTRO
-	_show_banner("ウェーブ %d" % run.wave)
+	_show_banner("レベル %d" % run.wave)
 	Assets.play("wave")
 	_hud.set_run(run)
 
@@ -426,6 +426,7 @@ func _award(amount: int, at: Vector2) -> void:
 	var text := Effects.FloatText.new()
 	text.text = "+%d" % coins
 	text.color = COIN_COLOR
+	text.font_size = int(minf(get_viewport_rect().size.x, get_viewport_rect().size.y) * 0.06)
 	text.position = at
 	_field.add_child(text)
 	_hud.set_run(run)
@@ -460,21 +461,24 @@ func _show_title() -> void:
 		sprite.scale = Vector2.ONE * minf(vp.x * 0.7 / logo.get_width(), 1.0)
 		_screen.add_child(sprite)
 	else:
-		_label("スペースボール投げ", int(short * 0.095), Vector2(vp.x * 0.5, vp.y * 0.15))
+		_label("デジタルボール投げ", int(short * 0.1), Vector2(vp.x * 0.5, vp.y * 0.14))
 	if best_coins > 0:
-		_label("最高 %d コイン　ウェーブ %d" % [best_coins, best_wave],
-			int(short * 0.042), Vector2(vp.x * 0.5, vp.y * 0.28), COIN_COLOR)
+		_label("最高 %d" % best_coins, int(short * 0.06),
+			Vector2(vp.x * 0.5, vp.y * 0.27), COIN_COLOR)
 
-	var start := _target("スタート", Vector2(vp.x * 0.5, vp.y * 0.55), short * 0.16)
+	var start := _target("スタート", Vector2(vp.x * 0.5, vp.y * 0.53), short * 0.16)
 	start.hit.connect(_start_run)
 
-	# which ball does what - the only thing a new customer has to know
+	# which ball does what - the only thing a new customer has to know, so
+	# it is two big balls with one word each, not a sentence
 	var legend := Legend.new()
-	legend.position = Vector2(vp.x * 0.5, vp.y * 0.83)
-	legend.width = short * 0.5
+	legend.position = Vector2(vp.x * 0.5, vp.y * 0.8)
+	legend.gap = short * 0.2
+	legend.radius = short * 0.055
 	_screen.add_child(legend)
-	_label("青: 通常　オレンジ: ファイア", int(short * 0.038),
-		Vector2(vp.x * 0.5, vp.y * 0.89))
+	_label("通常", int(short * 0.05), Vector2(vp.x * 0.5 - legend.gap, vp.y * 0.89))
+	_label("ファイア", int(short * 0.05), Vector2(vp.x * 0.5 + legend.gap, vp.y * 0.89),
+		FIRE_COLOR)
 
 func _show_upgrades(reuse := false) -> void:
 	state = State.UPGRADE
@@ -494,7 +498,7 @@ func _show_upgrades(reuse := false) -> void:
 		var target := _target(str(def["name"]), Vector2(spots[i], vp.y * 0.48), r)
 		target.color = Color(1.0, 0.92, 0.6) if int(def["tier"]) >= 3 else Color(0.95, 0.97, 1.0)
 		target.hit.connect(_take_upgrade.bind(str(def["id"])))
-		_label(str(def["desc"]), int(short * 0.04),
+		_label(str(def["desc"]), int(short * 0.052),
 			Vector2(spots[i], vp.y * 0.48 + r + short * 0.06))
 
 func _take_upgrade(id: String) -> void:
@@ -532,9 +536,9 @@ func _draw_result(record: bool) -> void:
 	# the payout line - big, because the stall reads it off the wall
 	_label("%d コイン" % run.coins, int(short * 0.16),
 		Vector2(vp.x * 0.5, vp.y * 0.34), COIN_COLOR)
-	_label("ウェーブ %d 到達%s" % [run.wave, "　新記録" if record else ""],
-		int(short * 0.045), Vector2(vp.x * 0.5, vp.y * 0.52))
-	var back := _target("タイトル", Vector2(vp.x * 0.5, vp.y * 0.73), short * 0.13)
+	_label("レベル %d 到達%s" % [run.wave, "　新記録" if record else ""],
+		int(short * 0.058), Vector2(vp.x * 0.5, vp.y * 0.48))
+	var back := _target("タイトル", Vector2(vp.x * 0.5, vp.y * 0.76), short * 0.13)
 	back.hit.connect(_show_title)
 
 func _show_banner(text: String) -> void:
@@ -633,11 +637,11 @@ class Hud extends Node2D:
 
 	func _layout() -> void:
 		var vp := get_viewport_rect().size
-		var size := int(minf(vp.x, vp.y) * 0.06)
+		var size := int(minf(vp.x, vp.y) * 0.075)
 		_coins_label.add_theme_font_size_override("font_size", size)
 		_wave_label.add_theme_font_size_override("font_size", size)
 		_coins_label.text = "%d" % coins
-		_wave_label.text = "ウェーブ %d" % wave
+		_wave_label.text = "レベル %d" % wave
 		_coins_label.reset_size()
 		_wave_label.reset_size()
 		_coins_label.position = Vector2(vp.x * 0.035 + size * 0.9, vp.y * 0.02)
@@ -646,7 +650,7 @@ class Hud extends Node2D:
 
 	func _draw() -> void:
 		var vp := get_viewport_rect().size
-		var size := minf(vp.x, vp.y) * 0.06
+		var size := minf(vp.x, vp.y) * 0.075
 		# coin
 		var coin_at := Vector2(vp.x * 0.035, vp.y * 0.02 + size * 0.55)
 		var coin_tex := Assets.texture("coin")
@@ -654,24 +658,30 @@ class Hud extends Node2D:
 			_stamp(coin_tex, coin_at, size * 0.9)
 		else:
 			draw_circle(coin_at, size * 0.36, COIN_COLOR)
-			draw_circle(coin_at, size * 0.26, COIN_COLOR.darkened(0.25))
+			draw_circle(coin_at, size * 0.24, COIN_COLOR.darkened(0.3))
+			draw_arc(coin_at, size * 0.36, 0.0, TAU, 32, Color.WHITE, 3.0)
 		# hull, bottom left
 		var heart_tex := Assets.texture("heart")
-		var r := size * 0.34
+		var r := size * 0.36
 		for i in max_hull:
 			var at := Vector2(vp.x * 0.04 + i * r * 2.6, vp.y * 0.905)
 			var on := i < hull
 			if heart_tex != null:
 				_stamp(heart_tex, at, r * 2.2, Color(1, 1, 1, 1.0 if on else 0.22))
 			else:
-				var color := Color(0.35, 0.95, 0.55) if on else Color(0.3, 0.35, 0.4)
-				draw_circle(at, r, color)
-				draw_arc(at, r, 0.0, TAU, 24, color.darkened(0.4), 3.0)
+				# an empty pip is an outline, never a dark disc - dark on
+				# dark is invisible once the room lights are up
+				if on:
+					draw_circle(at, r, Color(0.35, 1.0, 0.55))
+					draw_arc(at, r, 0.0, TAU, 28, Color.WHITE, 3.0)
+				else:
+					draw_arc(at, r, 0.0, TAU, 28, Color(0.55, 0.62, 0.7), 4.0)
 		# fireballs, bottom right
 		for i in fireballs:
 			var at := Vector2(vp.x - vp.x * 0.04 - i * r * 2.6, vp.y * 0.905)
 			draw_circle(at, r, FIRE_COLOR)
-			draw_circle(at + Vector2(-r * 0.25, -r * 0.25), r * 0.3, Color(1, 1, 1, 0.8))
+			draw_circle(at + Vector2(-r * 0.25, -r * 0.25), r * 0.3, Color(1, 1, 1, 0.9))
+			draw_arc(at, r, 0.0, TAU, 28, Color.WHITE, 3.0)
 
 	func _stamp(tex: Texture2D, at: Vector2, side: float, tint := Color.WHITE) -> void:
 		draw_texture_rect(tex, Rect2(at - Vector2(side, side) / 2.0, Vector2(side, side)),
@@ -690,27 +700,31 @@ class Cockpit extends Node2D:
 			draw_texture_rect(tex, Rect2(Vector2(0, top), Vector2(vp.x, vp.y - top)), false)
 			return
 		var height := vp.y - top
-		draw_rect(Rect2(Vector2(0, top), Vector2(vp.x, height)), Color(0.06, 0.08, 0.14))
-		draw_line(Vector2(0, top), Vector2(vp.x, top), Color(0.35, 0.7, 1.0, 0.8), 4.0)
+		draw_rect(Rect2(Vector2(0, top), Vector2(vp.x, height)), Color(0.13, 0.19, 0.34))
+		draw_line(Vector2(0, top), Vector2(vp.x, top), Color(0.5, 0.9, 1.0), 8.0)
 		# console in the middle, clear of the hull and fireball readouts
 		var console := Rect2(vp.x * 0.36, top + height * 0.22, vp.x * 0.28, height * 0.6)
-		draw_rect(console, Color(0.10, 0.14, 0.24))
-		draw_rect(console, Color(0.3, 0.6, 1.0, 0.35), false, 2.0)
+		draw_rect(console, Color(0.07, 0.10, 0.18))
+		draw_rect(console, Color(0.5, 0.85, 1.0), false, 3.0)
 		for i in 5:
 			var at := Vector2(console.position.x + console.size.x * (0.14 + 0.18 * i),
 				console.position.y + console.size.y * 0.5)
-			draw_circle(at, height * 0.075, Color(0.35, 0.75, 1.0, 0.5 + 0.1 * i))
+			draw_circle(at, height * 0.075, Color(0.45, 0.85, 1.0, 0.75 + 0.05 * i))
 
-## Title-screen ball key: blue on the left, orange on the right.
+## Title-screen ball key: blue on the left, orange on the right, drawn big
+## enough to read across a bright room.
 class Legend extends Node2D:
-	var width := 300.0
+	var gap := 130.0
+	var radius := 40.0
 
 	func _draw() -> void:
-		var r := width * 0.09
-		draw_circle(Vector2(-width * 0.25, 0), r, BLUE_COLOR)
-		draw_circle(Vector2(-width * 0.25 - r * 0.3, -r * 0.3), r * 0.3, Color(1, 1, 1, 0.8))
-		draw_circle(Vector2(width * 0.25, 0), r, FIRE_COLOR)
-		draw_circle(Vector2(width * 0.25 - r * 0.3, -r * 0.3), r * 0.3, Color(1, 1, 1, 0.8))
+		for side in [-1.0, 1.0]:
+			var at := Vector2(side * gap, 0.0)
+			var color := BLUE_COLOR if side < 0.0 else FIRE_COLOR
+			draw_circle(at, radius, color)
+			draw_circle(at + Vector2(-radius * 0.3, -radius * 0.3), radius * 0.28,
+				Color(1, 1, 1, 0.9))
+			draw_arc(at, radius, 0.0, TAU, 40, Color.WHITE, 3.0)
 
 ## Auto-turret beam, a short-lived line from the ship to the alien.
 class Beam extends Node2D:

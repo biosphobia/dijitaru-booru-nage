@@ -10,37 +10,40 @@ extends Object
 ## `add` upgrades hand the player more physical orange balls - the game
 ## announces those loudly so the person running the stall knows to pass
 ## them over.
+##
+## Names and descriptions stay short on purpose: they are read off a wall,
+## from across a room that may well have the lights on.
 
 const DEFS := [
 	# tier 1 - straightforward help
 	{"id": "aim", "tier": 1, "repeat": true,
-		"name": "照準拡大", "desc": "当たり判定が広がる"},
+		"name": "照準拡大", "desc": "判定が広がる"},
 	{"id": "fire", "tier": 1, "repeat": true, "balls": 2,
-		"name": "ファイア +2", "desc": "オレンジ球を2個もらえる"},
+		"name": "ファイア +2", "desc": "オレンジ球2個"},
 	{"id": "repair", "tier": 1, "repeat": true,
-		"name": "装甲修復", "desc": "装甲が2回復する"},
+		"name": "装甲修復", "desc": "装甲 +2"},
 	{"id": "coin", "tier": 1, "repeat": true,
-		"name": "コイン +30%", "desc": "もらえるコインが増える"},
+		"name": "コイン +30%", "desc": "コイン増加"},
 	# tier 2 - changes how a throw behaves
 	{"id": "power", "tier": 2, "repeat": false,
-		"name": "二連撃", "desc": "1発の威力が2倍"},
+		"name": "二連撃", "desc": "威力 2倍"},
 	{"id": "chain", "tier": 2, "repeat": false,
-		"name": "連鎖", "desc": "命中した敵の隣にも当たる"},
+		"name": "連鎖", "desc": "隣の敵にも"},
 	{"id": "slow", "tier": 2, "repeat": true,
-		"name": "重力網", "desc": "敵の動きが20%遅くなる"},
+		"name": "重力網", "desc": "敵が遅くなる"},
 	{"id": "hull", "tier": 2, "repeat": true,
-		"name": "装甲増設", "desc": "装甲の上限が1増える"},
+		"name": "装甲増設", "desc": "上限 +1"},
 	# tier 3 - run-defining
 	{"id": "turret", "tier": 3, "repeat": false,
-		"name": "自動砲台", "desc": "12秒ごとに敵を1体撃破"},
+		"name": "自動砲台", "desc": "12秒毎に撃破"},
 	{"id": "fever", "tier": 3, "repeat": false,
-		"name": "フィーバー", "desc": "8命中ごとに小爆発"},
+		"name": "フィーバー", "desc": "8命中で爆発"},
 	{"id": "revive", "tier": 3, "repeat": false,
-		"name": "緊急シールド", "desc": "撃沈を1回だけ耐える"},
+		"name": "緊急シールド", "desc": "1回耐える"},
 	{"id": "freeze", "tier": 3, "repeat": false,
-		"name": "時間停止", "desc": "ウェーブ開始時 敵が4秒止まる"},
+		"name": "時間停止", "desc": "開始時4秒停止"},
 	{"id": "gold", "tier": 3, "repeat": false,
-		"name": "コイン2倍", "desc": "もらえるコインが2倍"},
+		"name": "コイン2倍", "desc": "コイン 2倍"},
 ]
 
 ## Two upgrades to choose between. `choice_index` counts from 1 and caps
