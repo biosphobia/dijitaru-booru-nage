@@ -55,7 +55,7 @@ class Track:
         self.last_seen = frame_idx
 
 
-def consistent_direction(steps, min_speed, straight_cos, adj_ratio=2.2):
+def consistent_direction(steps, min_speed, straight_cos, adj_ratio=1.7):
     """If the steps look like a real ball in flight, return the mean
     direction (unit vector) and mean speed; else (None, reason).
 
@@ -136,16 +136,22 @@ def evaluate_contact(p, f, radii, cfg):
         if n_a < 1.5 or n_b <= n_a:
             fail("recede", "did not recede over two frames after the turn")
             continue
-        # the first post-turn observation is often smeared toward the wall
-        # (its blob still contains the incoming streak's tail) - allow that,
-        # but it must not have CONTINUED far along the approach direction
-        # the way a non-bouncing ball would
-        if float(v_a @ incoming) > max(4.0, 0.6 * speed):
-            fail("side", "still moving along the approach after the turn")
-            continue
+        # Contact = the trajectory BREAKS at the wall. A smooth flight
+        # never does; a bounce always kinks in direction (image-space turn)
+        # or in speed (the wall absorbs the depth component, which barely
+        # shows as a turn from a low camera angle but shows as a sudden
+        # slowdown). Foreshortening slows a flight gradually - the approach
+        # gate's adjacent-step ratio guarantees that - so a step drop below
+        # half the last approach step is a real kink.
         cos_turn = float(v_b @ incoming) / n_b
-        if cos_turn > cfg["min_cos"]:
-            fail("turn", "turn only %.0f deg" % np.degrees(np.arccos(min(1.0, cos_turn))))
+        turned = cos_turn <= cfg["min_cos"]
+        out_speed = float(np.hypot(*(p[-1] - p[-2])))
+        last_in = float(np.hypot(*(p[e] - p[e - 1])))
+        collapsed = out_speed < 0.5 * last_in
+        if not (turned or collapsed):
+            fail("turn", "no bounce kink (turn %.0f deg, kept %.0f%% speed)"
+                 % (np.degrees(np.arccos(np.clip(cos_turn, -1.0, 1.0))),
+                    100.0 * out_speed / max(last_in, 1e-6)))
             continue
         cluster = np.mean([p[e]] + hover, axis=0)
         hit_pos = cluster + incoming * (speed * cfg["lag"])
@@ -374,8 +380,11 @@ def main():
                 if max(speeds) >= min_speed:
                     _, reason = evaluate_contact(
                         tp, list(t.frames), list(t.radii), contact_cfg)
-                    print("MISS track#%d len=%d vmax=%.0f end=(%.0f,%.0f): %s"
-                          % (t.id, len(tp), max(speeds), tp[-1][0], tp[-1][1], reason))
+                    tf = list(t.frames)
+                    gaps = (tf[-1] - tf[0]) - (len(tf) - 1)
+                    path = "|".join("%d,%d" % (q[0], q[1]) for q in tp[-9:])
+                    print("MISS track#%d len=%d vmax=%.0f gaps=%d: %s  path=%s"
+                          % (t.id, len(tp), max(speeds), gaps, reason, path))
         tracks = alive
 
         # --- hit detection ----------------------------------------------

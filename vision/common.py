@@ -44,7 +44,7 @@ DEFAULT_CONFIG = {
         "min_area": 30,
         "max_area": 2500,
         "min_speed": 6.0,
-        "min_turn_deg": 60.0,
+        "min_turn_deg": 45.0,
         "approach_frames": 4,
         "straightness_deg": 45.0,
         "max_match_dist": 55.0,
