@@ -44,38 +44,36 @@ to be installed on the PC, not even Python: download, unzip, run.
   `BooruVision.exe`, pick from the menu (1 = calibrate, 2 = detect). If
   SmartScreen complains: "More info" > "Run anyway".
 
-macOS versions of both downloads are also on the Releases page — unzip,
-then **right-click > Open** the app the first time (they are unsigned; for
-the camera tool run `xattr -cr BooruVision` in Terminal once instead).
+Builds are currently Windows-only (macOS is on hold; presets remain in
+the repo).
 
 `config.json` (tuning) and `calibration.json` are created **next to the
 executable** on first run, so the whole thing lives in one folder — a USB
 stick works fine.
 
-Defaults are for a **regular webcam** (720p, MJPG, 60 fps requested) —
-including Mac built-in cameras.
-
 ## Using a PS3 Eye camera (Windows)
 
 The PS3 Eye is a great tracking camera — cheap and it does a true
-**60 fps at 640x480**. To use one, set `capture_width` to `640`,
-`capture_height` to `480` and `fourcc` to `""` in `config.json`. It is
-*not* a standard webcam though, so Windows needs a one-time driver
-install (the only install the whole project needs):
+**60 fps at 640x480**, which is exactly what the defaults in
+`config.json` are tuned for. It is *not* a standard webcam though, so
+Windows needs a one-time driver install (the only install the whole
+project needs). Either driver works — the tool captures via DirectShow:
 
-1. Download the installer from the
-   [PS3EyeDirectShow releases](https://github.com/jkevin/PS3EyeDirectShow/releases)
-   (or the [AllanCat fork](https://github.com/AllanCat/PS3EyeDirectShow)
-   with multi-camera and app-compatibility fixes). It installs a generic
-   WinUSB driver plus a DirectShow filter, which makes the PS3 Eye show
-   up as a normal Windows camera.
-2. Plug in the camera, then run `BooruVision.exe` — if another camera is
-   also connected and the wrong one opens, change `camera_index` in
-   `config.json` (0, 1, 2...).
+- **CL-Eye Platform Driver** (Code Laboratories): the classic driver.
+  Install it, plug in the camera, and check it works in the bundled
+  CL-Eye Test app first — if that shows 60 fps video, `BooruVision.exe`
+  will too. Unmaintained, so if a Windows update breaks it, switch to:
+- **[PS3EyeDirectShow](https://github.com/jkevin/PS3EyeDirectShow/releases)**
+  (or the [AllanCat fork](https://github.com/AllanCat/PS3EyeDirectShow)):
+  open-source WinUSB driver + DirectShow filter.
 
-Avoid the old CL-Eye driver — it is unmaintained and breaks on modern
-Windows. The opentrack "open driver" also won't work here: it only feeds
-opentrack, not other camera apps.
+If another camera is also connected and the wrong one opens, change
+`camera_index` in `config.json` (0, 1, 2...).
+
+Note: the in-game Model Studio viewfinder uses Media Foundation, which
+may not see the PS3 Eye through these DirectShow drivers — the viewfinder
+then falls back to streaming from the camera tool automatically. Ball
+tracking is unaffected either way.
 
 Using a **regular webcam** instead: set `capture_width`/`capture_height`
 to `1280`/`720` and `fourcc` to `"MJPG"` in `config.json` so it can reach

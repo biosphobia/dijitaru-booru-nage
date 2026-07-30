@@ -1,8 +1,8 @@
 {
   "camera_index": 0,
-  "fourcc": "MJPG",
-  "capture_width": 1280,
-  "capture_height": 720,
+  "fourcc": "",
+  "capture_width": 640,
+  "capture_height": 480,
   "capture_fps": 60,
   "udp_host": "127.0.0.1",
   "udp_port": 4242,
