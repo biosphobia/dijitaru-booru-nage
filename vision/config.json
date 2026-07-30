@@ -37,18 +37,18 @@
   },
   "colors": [
     {
-      "name": "lightblue",
-      "h_min": 80,
-      "h_max": 110,
-      "s_min": 40,
-      "v_min": 90
-    },
-    {
       "name": "orange",
       "h_min": 5,
       "h_max": 25,
-      "s_min": 80,
-      "v_min": 70
+      "s_min": 60,
+      "v_min": 60
+    },
+    {
+      "name": "blue",
+      "h_min": 85,
+      "h_max": 125,
+      "s_min": 40,
+      "v_min": 60
     }
   ]
 }

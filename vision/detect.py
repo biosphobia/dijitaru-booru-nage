@@ -28,7 +28,8 @@ from collections import deque
 import cv2
 import numpy as np
 
-from common import load_config, load_calibration, open_camera
+from common import (load_config, load_calibration, open_camera,
+                    ball_hsv_sample, hue_distance)
 from studio import MeshyStudio
 
 
@@ -366,24 +367,28 @@ def evaluate_contact_reversed(p, f, radii, cfg):
 def classify_color(frame_bgr, pos, radius, color_defs):
     """Ball color near pos -> color name or 'unknown'.
 
-    The sample patch inevitably contains background pixels (the blob
-    centroid lags the ball), so classify by the median of only the
-    *colorful* pixels in the patch instead of the whole-patch median.
+    Learned entries (h_center, from calibrate.py's color phase) classify
+    by NEAREST hue center - under projector tint the measured hue shifts,
+    but with two well-separated ball colors the nearest center is still
+    unambiguous. Range entries (h_min/h_max) are the hand-tuned fallback.
     """
-    h, w = frame_bgr.shape[:2]
-    x, y = int(pos[0]), int(pos[1])
-    r = max(4, int(radius))
-    x0, x1 = max(0, x - r), min(w, x + r)
-    y0, y1 = max(0, y - r), min(h, y + r)
-    if x0 >= x1 or y0 >= y1:
-        return "unknown"
-    patch = cv2.cvtColor(frame_bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV).reshape(-1, 3)
     lowest_s = min((c.get("s_min", 60) for c in color_defs), default=60)
     lowest_v = min((c.get("v_min", 60) for c in color_defs), default=60)
-    colorful = patch[(patch[:, 1] >= lowest_s) & (patch[:, 2] >= lowest_v)]
-    if len(colorful) < max(8, 0.1 * len(patch)):
+    hsv = ball_hsv_sample(frame_bgr, pos, radius, lowest_s, lowest_v)
+    if hsv is None:
         return "unknown"
-    hue, sat, val = np.median(colorful, axis=0)
+    hue, sat, val = hsv
+    learned = [c for c in color_defs if "h_center" in c]
+    if learned:
+        best, best_d = None, None
+        for c in learned:
+            if sat < c.get("s_min", 25) or val < c.get("v_min", 30):
+                continue
+            d = hue_distance(hue, c["h_center"])
+            if d <= max(3.0 * c.get("h_spread", 8.0), 20.0) \
+                    and (best_d is None or d < best_d):
+                best, best_d = c["name"], d
+        return best or "unknown"
     for c in color_defs:
         if sat < c.get("s_min", 60) or val < c.get("v_min", 60):
             continue
@@ -533,7 +538,10 @@ def main():
     noise_sample_mask = None  # pixels used to estimate sensor grain
     recent_hits = []  # (time, normalized_pos)
     recent_hits_s = []  # (time, screen pos) - twin/debris suppression
-    recent_frames = deque(maxlen=4)  # small color frames, for sampling pre-impact color
+    # small color frames for sampling pre-impact ball color; deep enough
+    # to reach the flight of emerge (contact at track START) and vanish
+    # (contact several silent frames back) hits
+    recent_frames = deque(maxlen=8)
     frame_idx = 0
     game_poly = None
 
@@ -900,11 +908,22 @@ def main():
                 (small.shape[1], small.shape[0]),
             )
             r_norm = float(np.hypot(*(mapped[1] - mapped[0])))
-            # sample the ball color from the contact frame at the contact
-            # point - that is exactly where and when the ball is in view
-            frame_back = min(hit_span + 1, len(recent_frames))
-            color = classify_color(recent_frames[-frame_back], cam_anchor,
+            # sample the ball color at the contact observation AND a
+            # couple of earlier in-flight positions, then vote: any single
+            # patch can be polluted by the projected content behind the
+            # ball, and the distinction has gameplay consequences
+            votes = []
+            base = hit_span if silence == 0 else 0  # contact obs, from end
+            for k in range(3):
+                pos_idx = len(p) - 1 - base - k
+                fb = hit_span + k + 1
+                if pos_idx < 0 or fb > len(recent_frames):
+                    break
+                c = classify_color(recent_frames[-fb], p[pos_idx],
                                    max(4.0, hit_radius), color_defs)
+                if c != "unknown":
+                    votes.append(c)
+            color = max(set(votes), key=votes.count) if votes else "unknown"
 
             hit_s = np.array(hit_s, dtype=np.float64)
             now = time.monotonic()

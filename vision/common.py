@@ -56,9 +56,13 @@ DEFAULT_CONFIG = {
         "cooldown_ms": 250,
         "cooldown_radius": 0.06,
     },
+    # Ball colors. Range entries (h_min/h_max) are hand-tuned fallbacks;
+    # calibrate.py's color-learning phase replaces them with measured
+    # centers (h_center/h_spread) sampled from real thrown balls under
+    # the actual projector light.
     "colors": [
-        {"name": "lightblue", "h_min": 80, "h_max": 110, "s_min": 40, "v_min": 90},
-        {"name": "orange", "h_min": 5, "h_max": 25, "s_min": 80, "v_min": 70},
+        {"name": "orange", "h_min": 5, "h_max": 25, "s_min": 60, "v_min": 60},
+        {"name": "blue", "h_min": 85, "h_max": 125, "s_min": 40, "v_min": 60},
     ],
 }
 
@@ -85,6 +89,41 @@ def load_config():
         print("Created default config:", CONFIG_PATH)
     with open(CONFIG_PATH) as f:
         return json.load(f)
+
+
+def save_colors(colors):
+    """Replace the config's ball-color definitions (learned classifier)."""
+    cfg = load_config()
+    cfg["colors"] = colors
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(cfg, f, indent=2)
+    return CONFIG_PATH
+
+
+def ball_hsv_sample(frame_bgr, pos, radius, s_floor=35, v_floor=45):
+    """Median HSV of the COLORFUL pixels in a patch around pos, or None.
+
+    The patch inevitably contains background pixels (the blob centroid
+    lags the ball), so only clearly saturated-and-bright pixels count.
+    """
+    h, w = frame_bgr.shape[:2]
+    x, y = int(pos[0]), int(pos[1])
+    r = max(4, int(radius))
+    x0, x1 = max(0, x - r), min(w, x + r)
+    y0, y1 = max(0, y - r), min(h, y + r)
+    if x0 >= x1 or y0 >= y1:
+        return None
+    patch = cv2.cvtColor(frame_bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    colorful = patch[(patch[:, 1] >= s_floor) & (patch[:, 2] >= v_floor)]
+    if len(colorful) < max(8, 0.1 * len(patch)):
+        return None
+    return np.median(colorful, axis=0)
+
+
+def hue_distance(a, b):
+    """Circular distance between two OpenCV hues (0-179)."""
+    d = abs(float(a) - float(b)) % 180.0
+    return min(d, 180.0 - d)
 
 
 def update_meshy_config(updates):

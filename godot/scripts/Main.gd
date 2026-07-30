@@ -28,6 +28,7 @@ const CalibrationScene := preload("res://scripts/CalibrationScreen.gd")
 
 const BACKGROUND := Color(0.03, 0.03, 0.09)
 const MARK_COLORS := {
+	"blue": Color(0.45, 0.85, 1.0),
 	"lightblue": Color(0.45, 0.85, 1.0),
 	"orange": Color(1.0, 0.55, 0.15),
 }

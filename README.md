@@ -337,9 +337,16 @@ needs the API key.
 - In the detect preview window, press **M** to see the motion mask —
   if it is full of speckles, raise `noise_multiplier`; if the ball
   streak is invisible in it, lower `diff_threshold`.
-- `colors` — HSV ranges used to name the ball color (`h` 0–179, OpenCV
-  convention). Ships with `lightblue` and `orange`. Tune them in your
-  actual room lighting: the projector tints the balls.
+- `colors` — ball color definitions (`orange` and `blue`). **Don't tune
+  these by hand: calibrate.py learns them.** After the geometry
+  calibration saves, it asks you to throw 3+ balls of each color at the
+  projection and samples them mid-flight under the real projector
+  light, then saves measured hue centers. Hits are classified by the
+  nearest learned center (with several in-flight samples voting), so
+  moderate projector tint cannot flip a ball's color. If the two colors
+  measure too close together under your light, it warns and keeps the
+  old definitions instead. The hand-tuned `h_min`/`h_max` ranges remain
+  as fallback until a learning pass has been done.
 
 ## Practical tips
 

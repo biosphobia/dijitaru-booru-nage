@@ -15,6 +15,8 @@ of many observations per marker for accuracy. Works with a partial view
 of the grid - MIN_MARKERS locked markers are enough.
 """
 
+import time
+
 import cv2
 import numpy as np
 
@@ -22,9 +24,12 @@ from common import (
     MARKER_CENTERS,
     CalibrationMapper,
     aruco_detector,
+    ball_hsv_sample,
+    hue_distance,
     load_config,
     open_camera,
     save_calibration,
+    save_colors,
 )
 
 MIN_MARKERS = 6    # markers needed for a fit (of the 12 in the grid)
@@ -79,6 +84,151 @@ def fit_calibration(centers_by_id, frame_size):
         "residual_max": float(residual.max()),
     }
     return homography, src_in, dst_in, stats
+
+
+def _hue_center(samples):
+    """Robust circular hue center + spread from (h, s, v) samples.
+
+    Histogram peak first (stray samples - a hand, a reflection - must not
+    drag the estimate), then median of the samples near the peak.
+    """
+    hues = np.array([s[0] for s in samples], dtype=np.float64)
+    hist = np.bincount(hues.astype(int) % 180, minlength=180).astype(float)
+    smooth = np.convolve(np.tile(hist, 3), np.ones(9), "same")[180:360]
+    peak = int(np.argmax(smooth))
+    dist = np.minimum(np.abs(hues - peak), 180 - np.abs(hues - peak))
+    core = [s for s, d in zip(samples, dist) if d <= 25]
+    ch = np.array([s[0] for s in core], dtype=np.float64)
+    shifted = ((ch - peak + 90.0) % 180.0) - 90.0
+    center = (peak + float(np.median(shifted))) % 180.0
+    spread = 1.4826 * float(np.median(np.abs(shifted - np.median(shifted))))
+    s_med = float(np.median([s[1] for s in core]))
+    v_med = float(np.median([s[2] for s in core]))
+    return center, max(4.0, spread), s_med, v_med, len(core)
+
+
+def learn_colors(cam, config, mapper, frame_size):
+    """Sample real thrown balls per color and save a learned classifier.
+
+    For each configured color: the player throws a few balls of that
+    color at the projection; ball-sized moving blobs inside the game
+    area are color-sampled mid-flight, under the real projector light.
+    """
+    det = config.get("detection", {})
+    names = [c["name"] for c in config.get("colors", [])] or ["orange", "blue"]
+    screen_h = det.get("screen_height_m", 2.0)
+    ball_d = det.get("ball_diameter_m", 0.04)
+    scale_pts, scales = mapper.scale_grid(
+        frame_size, det.get("screen_aspect", 16.0 / 9.0))
+    r_grid = np.maximum(2.0, scales * (0.5 * ball_d / screen_h))
+    poly = mapper.game_polygon_px(frame_size)
+
+    learned = []
+    prev_gray = None
+    for name in names:
+        samples = []       # (h, s, v)
+        dots = []          # sample positions for the preview
+        throws = 0
+        last_sample_t = 0.0
+        burst_n = 0
+        print("COLOR '%s': throw 3 or more %s balls at the projection."
+              % (name, name.upper()))
+        while True:
+            ok, frame = cam.read()
+            if not ok:
+                raise SystemExit("Camera stopped delivering frames.")
+            gray = cv2.GaussianBlur(
+                cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+            if prev_gray is not None:
+                diff = cv2.absdiff(gray, prev_gray)
+                _, mask = cv2.threshold(diff, 28, 255, cv2.THRESH_BINARY)
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
+                                        np.ones((3, 3), np.uint8))
+                mask = cv2.dilate(mask, np.ones((3, 3), np.uint8))
+                cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+                now = time.monotonic()
+                for cnt in cnts:
+                    area = cv2.contourArea(cnt)
+                    m = cv2.moments(cnt)
+                    if m["m00"] <= 0:
+                        continue
+                    c = (m["m10"] / m["m00"], m["m01"] / m["m00"])
+                    k = int(np.argmin(((scale_pts - c) ** 2).sum(axis=1)))
+                    r_exp = r_grid[k]
+                    if not (0.35 * np.pi * r_exp ** 2 <= area
+                            <= 25.0 * np.pi * r_exp ** 2):
+                        continue
+                    if cv2.pointPolygonTest(
+                            poly.astype(np.float32), c, False) < 0:
+                        continue
+                    hsv = ball_hsv_sample(frame, c, max(4.0, 1.2 * r_exp))
+                    if hsv is None:
+                        continue
+                    if now - last_sample_t > 0.6:
+                        if burst_n >= 3:
+                            throws += 1
+                        burst_n = 0
+                    burst_n += 1
+                    last_sample_t = now
+                    samples.append(tuple(float(x) for x in hsv))
+                    dots.append((int(c[0]), int(c[1])))
+                # a finished burst counts once things go quiet
+                if burst_n >= 3 and now - last_sample_t > 0.6:
+                    throws += 1
+                    burst_n = 0
+            prev_gray = gray
+
+            view = frame.copy()
+            cv2.polylines(view, [poly], True, (0, 200, 0), 2)
+            for d in dots[-120:]:
+                cv2.circle(view, d, 3, (255, 180, 0), -1)
+            done = throws >= 3 and len(samples) >= 20
+            col = (0, 200, 0) if done else (0, 165, 255)
+            cv2.putText(view,
+                        "COLOR '%s': %d throws, %d samples" % (
+                            name, throws, len(samples)),
+                        (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.0, col, 2)
+            cv2.putText(view,
+                        "throw %s balls - SPACE=done  N=skip color  Q=quit"
+                        % name.upper(),
+                        (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, col, 2)
+            cv2.rectangle(view, (0, 0), (view.shape[1] - 1, view.shape[0] - 1),
+                          col, 6)
+            cv2.imshow("calibrate", view)
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                print("Color learning aborted; colors unchanged.")
+                return
+            if key == ord("n"):
+                print("  skipped '%s' (keeping its old definition)." % name)
+                samples = []
+                break
+            if key == ord(" ") and len(samples) >= 12:
+                break
+        if len(samples) >= 12:
+            center, spread, s_med, v_med, used = _hue_center(samples)
+            learned.append({
+                "name": name,
+                "h_center": round(center, 1),
+                "h_spread": round(spread, 1),
+                "s_min": int(max(25, 0.5 * s_med)),
+                "v_min": int(max(30, 0.5 * v_med)),
+            })
+            print("  '%s': hue %.0f (spread %.0f), sat %.0f, val %.0f "
+                  "from %d samples" % (name, center, spread, s_med, v_med, used))
+
+    if len(learned) < 2:
+        print("Fewer than two colors learned; config colors unchanged.")
+        return
+    d = hue_distance(learned[0]["h_center"], learned[1]["h_center"])
+    if d < 25:
+        print("WARNING: the two ball colors are only %.0f hue apart under "
+              "this light - distinction will be unreliable. Config colors "
+              "left unchanged; try different balls or lighting." % d)
+        return
+    path = save_colors(learned)
+    print("Learned ball colors saved to %s (hue separation %.0f)." % (path, d))
 
 
 def main():
@@ -144,6 +294,10 @@ def main():
                   "mean %.1f px, max %.1f px (on a 1280x720 screen) - "
                   "corrected by the spline layer" %
                   (stats["residual_mean"] * 1280, stats["residual_max"] * 1280))
+            # learn the real ball colors under this projector light:
+            # a few throws per color, sampled mid-flight (skippable)
+            mapper = CalibrationMapper(homography, (w, h), src, dst)
+            learn_colors(cam, config, mapper, (w, h))
             break
 
     cam.release()
