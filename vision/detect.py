@@ -36,54 +36,70 @@ class Track:
 
     _next_id = 0
 
-    def __init__(self, pos, radius, frame_idx):
+    def __init__(self, pos, spos, radius, frame_idx):
         self.id = Track._next_id
         Track._next_id += 1
-        self.positions = deque(maxlen=12)  # processing-scale pixels
+        self.positions = deque(maxlen=12)  # processing-scale camera pixels
+        self.spos = deque(maxlen=12)       # screen space (aspect-corrected)
         self.radii = deque(maxlen=12)
         self.frames = deque(maxlen=12)  # frame index of each observation
         self.positions.append(pos)
+        self.spos.append(np.asarray(spos, dtype=np.float64))
         self.radii.append(radius)
         self.frames.append(frame_idx)
         self.last_seen = frame_idx
         self.born = time.monotonic()
         self.hit_fired = False
 
-    def add(self, pos, radius, frame_idx):
+    def add(self, pos, spos, radius, frame_idx):
         self.positions.append(pos)
+        self.spos.append(np.asarray(spos, dtype=np.float64))
         self.radii.append(radius)
         self.frames.append(frame_idx)
         self.last_seen = frame_idx
 
 
-def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9):
+def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9,
+                         noise=0.006):
     """If the per-frame velocities look like a real ball in flight, return
     the mean direction (unit vector) and mean speed; else (None, reason).
 
     A real thrown ball moves fast, straight, and with smoothly changing
-    speed (perspective makes it decelerate/accelerate gradually) - sensor
-    grain and chained flicker artifacts do none of that. Speeds are
-    compared between ADJACENT steps so foreshortening is tolerated."""
+    speed (perspective and drag decelerate it gradually) - sensor grain and
+    chained flicker artifacts do none of that.
+
+    Both consistency tests are NOISE-AWARE, because blob centroids jitter
+    by a fixed amount (`noise`, in screen units) regardless of speed: a
+    2px-vs-4px difference is jitter, not a real 2x speed jump, and short
+    steps have unreliable directions. Without this, a ball decelerating
+    into the screen fails the checks exactly when it matters most."""
     units, speeds = [], []
     for s in velocities:
         n = np.hypot(s[0], s[1])
-        if n < max(2.0, min_speed * 0.5):
-            return None, 0.0, "approach step too slow (%.1f px/frame)" % n
+        if n < max(0.004, min_speed * 0.5):
+            return None, 0.0, "approach step too slow (%.1f scr/1000)" % (n * 1000)
         units.append(s / n)
         speeds.append(n)
     if float(np.mean(speeds)) < min_speed:
-        return None, 0.0, "approach too slow on average (%.1f px/frame)" % np.mean(speeds)
+        return None, 0.0, "approach too slow on average (%.1f scr/1000)" \
+            % (np.mean(speeds) * 1000)
     for a, b in zip(speeds, speeds[1:]):
-        if max(a, b) > adj_ratio * min(a, b):
+        if max(a, b) > adj_ratio * min(a, b) + noise:
             return None, 0.0, "speed jump %.1fx between steps" % (max(a, b) / min(a, b))
     mean = np.sum(units, axis=0)
     norm = np.hypot(mean[0], mean[1])
     if norm < 1e-9:
         return None, 0.0, "no consistent direction"
     mean /= norm
-    worst = min(float(u @ mean) for u in units)
-    if worst < straight_cos:
-        return None, 0.0, "approach not straight (%.0f deg wobble)" % np.degrees(np.arccos(max(-1.0, worst)))
+    # judge straightness only on steps long enough for their direction to
+    # be meaningful; jitter-sized steps cannot disprove a straight flight
+    judged = [(u, n) for u, n in zip(units, speeds) if n > 2.0 * noise]
+    if judged:
+        worst_u, _ = min(judged, key=lambda un: float(un[0] @ mean))
+        worst = float(worst_u @ mean)
+        if worst < straight_cos:
+            return None, 0.0, "approach not straight (%.0f deg wobble)" \
+                % np.degrees(np.arccos(max(-1.0, worst)))
     return mean, float(np.mean(speeds)), ""
 
 
@@ -91,14 +107,23 @@ def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9):
 _STAGE_NAMES = ["short", "gap", "approach", "hover", "recede", "side", "turn"]
 
 
+# gravity direction in screen space (aspect-corrected: 1.0 = screen height)
+_DOWN = np.array([0.0, 1.0])
+_DROP_COS = np.cos(np.radians(40.0))
+
+
 def evaluate_contact(p, f, radii, cfg):
     """Check a track's history for the wall-contact signature.
 
-    p: positions (np arrays), f: frame indices, radii: blob radii.
-    cfg: dict with approach, min_speed, straight_cos, hover_max, min_cos,
-    side_cos, lag.
-    Returns (hit, reason): hit = (pos, radius, frames_back) or None;
-    reason = human-readable deepest gate failure among candidate windows.
+    Operates in SCREEN space (aspect-corrected normalized coordinates,
+    1.0 = screen height), where perspective is already removed: an angled
+    throw at constant physical speed has constant speed here, and gravity
+    is exactly +y. Units: speeds are screen-heights per frame.
+
+    p: screen positions (np arrays), f: frame indices, radii: blob radii
+    in camera px (passed through for the hit).
+    Returns (hit, reason): hit = (screen_pos, radius, frames_back) or
+    None; reason = deepest gate failure among candidate windows.
     """
     n = len(p)
     best_stage, best_reason = -1, "track too short (%d observations)" % n
@@ -112,23 +137,37 @@ def evaluate_contact(p, f, radii, cfg):
             if idx > best_stage:
                 best_stage, best_reason = idx, reason
 
-        # approach must be a near-gap-free frame run (two misses allowed;
-        # velocities below are per-frame, so gaps do not distort speeds)
-        if f[e] - f[e - cfg["approach"]] > cfg["approach"] + 2:
-            fail("gap", "approach had missed frames")
-            continue
         if f[-1] - f[e] > (n - 1 - e) + 2:
             fail("gap", "bounce-out had missed frames")
             continue
-        vels = [(p[i + 1] - p[i]) / max(1, f[i + 1] - f[i])
-                for i in range(e - cfg["approach"], e)]
-        incoming, speed, why = consistent_direction(
-            vels, cfg["min_speed"], cfg["straight_cos"])
+        # Try the full approach window first, then shorter ones: a track's
+        # first observations are often unreliable (the motion streak has
+        # just appeared, its centroid jumps), and one bad early step must
+        # not void an otherwise clean flight. Three consistent fast steps
+        # are still far beyond what noise produces, and the contact kink
+        # below is required on top of them either way.
+        incoming, speed, vels, why = None, 0.0, None, ""
+        for alen in range(cfg["approach"], 2, -1):
+            if e - alen < 0:
+                break
+            # approach must be a near-gap-free frame run (two misses
+            # allowed; velocities are per-frame, so gaps do not distort
+            # speeds)
+            if f[e] - f[e - alen] > alen + 2:
+                why = why or "approach had missed frames"
+                continue
+            cand = [(p[i + 1] - p[i]) / max(1, f[i + 1] - f[i])
+                    for i in range(e - alen, e)]
+            incoming, speed, why = consistent_direction(
+                cand, cfg["min_speed"], cfg["straight_cos"])
+            if incoming is not None:
+                vels = cand
+                break
         if incoming is None:
-            fail("approach", why)
+            fail("approach", why or "no usable approach window")
             continue
         hover = [p[i] for i in range(e + 1, n - 2)]
-        hover_limit = max(10.0, speed * 1.2)
+        hover_limit = max(0.03, speed * 1.2)
         if any(np.hypot(*(q - p[e])) > hover_limit for q in hover):
             fail("hover", "did not stay near the turn point")
             continue
@@ -136,29 +175,67 @@ def evaluate_contact(p, f, radii, cfg):
         v_b = p[-1] - p[e]
         n_a = np.hypot(v_a[0], v_a[1])
         n_b = np.hypot(v_b[0], v_b[1])
-        if n_a < 1.5 or n_b <= n_a:
+        if n_a < 0.004 or n_b <= n_a:
             fail("recede", "did not recede over two frames after the turn")
             continue
         # Contact = the trajectory BREAKS at the wall. A smooth flight
-        # never does; a bounce always kinks in direction (image-space turn)
-        # or in speed (the wall absorbs the depth component, which barely
-        # shows as a turn from a low camera angle but shows as a sudden
-        # slowdown). Foreshortening slows a flight gradually - the approach
-        # gate's adjacent-step ratio guarantees that - so a step drop below
-        # half the last approach step is a real kink.
+        # never does; a soft projector screen deadens the ball, so the
+        # break shows as one of:
+        #   turned    - image direction change (head-on-ish bounces)
+        #   collapsed - sudden speed drop (screen absorbing the flight)
+        #   dropped   - post-impact motion is gravity: straight DOWN in
+        #               screen space, while the approach was not downward
+        #               (the deadened ball falling off the screen)
+        out_dir = v_b / n_b
         cos_turn = float(v_b @ incoming) / n_b
         turned = cos_turn <= cfg["min_cos"]
         out_speed = float(np.hypot(*(p[-1] - p[-2]))) / max(1, f[-1] - f[-2])
         last_in = float(np.hypot(*(p[e] - p[e - 1]))) / max(1, f[e] - f[e - 1])
-        collapsed = out_speed < 0.52 * last_in
-        if not (turned or collapsed):
+        # Compare the outgoing speed against the approach's OWN extrapolated
+        # trend: steady deceleration (perspective, drag) continues its trend
+        # and is no kink, while a wall breaks it. The trend is the geometric
+        # mean speed ratio across the whole approach - a single step pair is
+        # far too noisy to extrapolate from.
+        aspeeds = [float(np.hypot(v[0], v[1])) for v in vels]
+        trend = float(np.clip(
+            (aspeeds[-1] / max(aspeeds[0], 1e-9)) ** (1.0 / max(1, len(aspeeds) - 1)),
+            0.7, 1.1))
+        horizon = min(6, max(1, f[-1] - f[e]))
+        collapsed = out_speed < 0.52 * last_in * (trend ** horizon)
+        # a real gravity drop: both post-turn observations downward, real
+        # displacement (not jitter), and accelerating (distance roughly
+        # doubles frame over frame) - while the approach was not downward
+        dropped = (float(out_dir @ _DOWN) >= _DROP_COS
+                   and float(v_a @ _DOWN) / n_a >= 0.5
+                   and n_b >= 0.008
+                   and n_b >= 1.6 * n_a
+                   and float(incoming @ _DOWN) < _DROP_COS)
+        if not (turned or collapsed or dropped):
             fail("turn", "no bounce kink (turn %.0f deg, kept %.0f%% speed)"
                  % (np.degrees(np.arccos(np.clip(cos_turn, -1.0, 1.0))),
                     100.0 * out_speed / max(last_in, 1e-6)))
             continue
+        if cfg.get("debug"):
+            print("CONTACT e=%d/%d turned=%s collapsed=%s dropped=%s "
+                  "out=%.4f last_in=%.4f trend=%.2f horizon=%d n_a=%.4f n_b=%.4f"
+                  % (e, n, turned, collapsed, dropped, out_speed, last_in,
+                     trend, horizon, n_a, n_b))
+        # The impact is where the incoming flight line meets the outgoing
+        # (bounce or gravity-drop) line - a far better estimate than
+        # extrapolating a fixed fraction of a step, because the contact
+        # generally happens BETWEEN two observations.
         cluster = np.mean([p[e]] + hover, axis=0)
         hit_pos = cluster + incoming * (speed * cfg["lag"])
-        return (hit_pos, radii[e], n - 1 - e), ""
+        cross = float(incoming[0] * out_dir[1] - incoming[1] * out_dir[0])
+        if abs(cross) > 0.25:  # lines meet at a usable angle
+            w = p[-1] - p[e]
+            t = float(w[0] * out_dir[1] - w[1] * out_dir[0]) / cross
+            if -0.5 * speed <= t <= 3.0 * speed + 0.05:
+                meet = p[e] + incoming * t
+                # trust it only if it lands near the observed contact area
+                if float(np.hypot(*(meet - cluster))) <= max(0.06, 2.0 * speed):
+                    hit_pos = meet
+        return (hit_pos, radii[e], n - 1 - e, incoming), ""
     return None, best_reason
 
 
@@ -226,7 +303,11 @@ def main():
     proc_width = det.get("processing_width", 640)
     min_area = det.get("min_area", 30)
     max_area = det.get("max_area", 2500)
-    min_speed = det.get("min_speed", 6.0)  # px/frame at processing scale
+    # minimum ball speed in screen units per frame (1.0 = screen height);
+    # 0.012 at 60 fps on a ~1.7 m screen is roughly 1.2 m/s
+    min_speed = det.get("min_speed_norm", 0.012)
+    # physical aspect of the projection, to make screen space isotropic
+    screen_aspect = det.get("screen_aspect", 16.0 / 9.0)
     max_match_dist = det.get("max_match_dist", 55.0)
     track_timeout = det.get("track_timeout_frames", 5)
     mode = det.get("mode", "reversal")
@@ -250,6 +331,7 @@ def main():
         "hover_max": hover_max,
         "min_cos": min_cos,
         "lag": lag_correction,
+        "debug": det.get("debug", False),
     }
     # Vanish hits: a ball on a long consistent approach that stops being
     # detected mid-frame (away from the camera edges) has hit the wall -
@@ -260,6 +342,9 @@ def main():
     vanish_approach = approach_frames + 2             # longer proof needed
     vanish_lead = det.get("vanish_lead", 0.75)        # steps past last obs
     edge_margin = det.get("edge_margin", 25)          # px at processing scale
+    # a SLOW ball can fade from detection without hitting anything (its
+    # frame difference shrinks) - vanish hits need clearly-flying speed
+    vanish_min_speed = det.get("vanish_min_speed_norm", min_speed * 2.0)
     base_threshold = det.get("diff_threshold", 25)
     auto_threshold = det.get("auto_threshold", True)
     noise_multiplier = det.get("noise_multiplier", 6.0)
@@ -275,7 +360,7 @@ def main():
     prev_gray = None
     tracks = []
     recent_hits = []  # (time, normalized_pos)
-    recent_hits_cam = []  # (time, camera px) - debris suppression for vanish hits
+    recent_hits_s = []  # (time, screen pos) - twin/debris suppression
     recent_frames = deque(maxlen=4)  # small color frames, for sampling pre-impact color
     frame_idx = 0
     game_poly = None
@@ -354,6 +439,15 @@ def main():
             radius = max(2.0, min(rw, rh) / 2.0)
             detections.append((center, radius))
 
+        # map detections into screen space (aspect-corrected, isotropic):
+        # all contact physics runs there, where perspective is removed
+        if detections:
+            spts = mapper.map_points(
+                [d[0] for d in detections], (small.shape[1], small.shape[0]))
+            spts[:, 0] *= screen_aspect
+        else:
+            spts = np.zeros((0, 2))
+
         # --- track association --------------------------------------------
         # Constant-velocity prediction: a moving ball's blob chain matches
         # its own predicted continuation, so the streak's leading and
@@ -381,10 +475,12 @@ def main():
                 if d < best_d:
                     best, best_d = i, d
             if best is not None:
-                track.add(detections[best][0], detections[best][1], frame_idx)
+                track.add(detections[best][0], spts[best],
+                          detections[best][1], frame_idx)
                 unmatched.remove(best)
         for i in unmatched:
-            tracks.append(Track(detections[i][0], detections[i][1], frame_idx))
+            tracks.append(Track(detections[i][0], spts[i],
+                                detections[i][1], frame_idx))
 
         # retire stale tracks; print a post-mortem for any that looked like
         # a real throw but never fired, saying which gate rejected it
@@ -394,74 +490,78 @@ def main():
                 alive.append(t)
                 continue
             if not t.hit_fired and len(t.positions) >= approach_frames + 3:
-                tp = [np.array(q, dtype=np.float64) for q in t.positions]
-                speeds = [np.hypot(*(tp[i + 1] - tp[i])) for i in range(len(tp) - 1)]
-                if max(speeds) >= min_speed:
+                ts = list(t.spos)
+                sspeeds = [np.hypot(*(ts[i + 1] - ts[i])) for i in range(len(ts) - 1)]
+                if max(sspeeds) >= min_speed:
                     _, reason = evaluate_contact(
-                        tp, list(t.frames), list(t.radii), contact_cfg)
+                        ts, list(t.frames), list(t.radii), contact_cfg)
                     tf = list(t.frames)
                     gaps = (tf[-1] - tf[0]) - (len(tf) - 1)
-                    path = "|".join("%d,%d" % (q[0], q[1]) for q in tp[-9:])
-                    print("MISS track#%d len=%d vmax=%.0f gaps=%d: %s  path=%s"
-                          % (t.id, len(tp), max(speeds), gaps, reason, path))
+                    path = "|".join("%d,%d" % (q[0], q[1])
+                                    for q in list(t.positions)[-9:])
+                    print("MISS track#%d len=%d vmax=%.0f/1000 gaps=%d: %s  path=%s"
+                          % (t.id, len(ts), max(sspeeds) * 1000, gaps, reason, path))
         tracks = alive
 
-        # --- hit detection ----------------------------------------------
+        # --- hit detection (all gates in screen space) -------------------
         for track in tracks:
             if track.hit_fired:
                 continue
             silence = frame_idx - track.last_seen
             p = [np.array(pt, dtype=np.float64) for pt in track.positions]
-            hit_pos = None
+            s = list(track.spos)
+            hit_s = None
             hit_radius = 0.0
             hit_span = 0  # how many frames ago the contact frame was
-            if silence == 0 and mode == "instant" and len(p) >= 3:
+            hit_dir = None  # approach direction (for twin-estimate merging)
+            if silence == 0 and mode == "instant" and len(s) >= 3:
                 tf = list(track.frames)
-                vels = [(p[-2] - p[-3]) / max(1, tf[-2] - tf[-3]),
-                        (p[-1] - p[-2]) / max(1, tf[-1] - tf[-2])]
+                vels = [(s[-2] - s[-3]) / max(1, tf[-2] - tf[-3]),
+                        (s[-1] - s[-2]) / max(1, tf[-1] - tf[-2])]
                 direction, _, _ = consistent_direction(vels, min_speed, straight_cos)
                 if direction is not None:
-                    hit_pos = p[-1]
+                    hit_s = s[-1]
                     hit_radius = track.radii[-1]
+                    hit_dir = direction
             elif silence == 0 and mode == "reversal":
-                # Wall contact with a visible bounce: a consistent straight
+                # Wall contact with a visible break: a consistent straight
                 # fast APPROACH, an optional short HOVER cluster at the
-                # contact point, then a trajectory KINK (turn or sudden
-                # slowdown). See evaluate_contact.
+                # contact point, then a trajectory KINK (turn, sudden
+                # slowdown, or the deadened ball dropping straight down).
                 hit, _ = evaluate_contact(
-                    p, list(track.frames), list(track.radii), contact_cfg)
+                    s, list(track.frames), list(track.radii), contact_cfg)
                 if hit is not None:
-                    hit_pos, hit_radius, hit_span = hit
+                    hit_s, hit_radius, hit_span, hit_dir = hit
             elif (vanish_hits and mode == "reversal"
-                  and silence == vanish_silence and len(p) >= vanish_approach + 1):
-                # Wall contact with an INVISIBLE bounce: the ball slowed
-                # below detection right at the wall and the track went
+                  and silence == vanish_silence and len(s) >= vanish_approach + 1):
+                # Wall contact with an INVISIBLE break: the soft screen
+                # deadened the ball below detection and the track went
                 # silent mid-frame. Demand a longer gap-free consistent
                 # approach ending at the final observation, away from the
                 # camera edges (an exiting ball dies at the border).
                 f = list(track.frames)
                 if f[-1] - f[-1 - vanish_approach] <= vanish_approach + 2:
-                    vels = [(p[i + 1] - p[i]) / max(1, f[i + 1] - f[i])
-                            for i in range(len(p) - 1 - vanish_approach, len(p) - 1)]
+                    vels = [(s[i + 1] - s[i]) / max(1, f[i + 1] - f[i])
+                            for i in range(len(s) - 1 - vanish_approach, len(s) - 1)]
                     incoming, speed, _ = consistent_direction(
                         vels, min_speed, straight_cos)
                     x, y = p[-1]
                     inside = (edge_margin < x < small.shape[1] - edge_margin
                               and edge_margin < y < small.shape[0] - edge_margin)
                     # motion flying AWAY from a recent hit (the hit lies
-                    # behind it along its own flight line) is the OUTGOING ball -
-                    # its later fade is not a new impact. A fresh throw at
-                    # the same spot has the old hit AHEAD, not behind.
+                    # behind it along its own flight line) is the OUTGOING
+                    # ball - its later fade is not a new impact. A fresh
+                    # throw at the same spot has the old hit AHEAD.
                     now_t = time.monotonic()
                     debris = False
                     if incoming is not None:
-                        for t_hit, hp in recent_hits_cam:
+                        for t_hit, hq in recent_hits_s:
                             if now_t - t_hit >= 1.5:
                                 continue
-                            d = np.array(hp, dtype=np.float64) - p[-1]
+                            d = hq - s[-1]
                             along = float(d @ incoming)
                             perp = float(np.hypot(*(d - along * incoming)))
-                            if along < 10.0 and perp < 50.0:
+                            if along < 0.02 and perp < 0.12:
                                 debris = True
                                 break
                     # if another live track continues the flight ahead along
@@ -472,44 +572,51 @@ def main():
                         for other in tracks:
                             if other is track or frame_idx - other.last_seen > 1:
                                 continue
-                            d = np.array(other.positions[-1]) - p[-1]
+                            d = other.spos[-1] - s[-1]
                             along = float(d @ incoming)
                             perp = float(np.hypot(*(d - along * incoming)))
-                            if 0.0 < along < speed * (silence + 3) and perp < 40.0:
+                            if 0.0 < along < speed * (silence + 3) and perp < 0.10:
                                 continued = True
                                 break
-                    if incoming is not None and inside and not debris and not continued:
-                        hit_pos = p[-1] + incoming * (speed * vanish_lead)
+                    if (incoming is not None and speed >= vanish_min_speed
+                            and inside and not debris and not continued):
+                        hit_s = s[-1] + incoming * (speed * vanish_lead)
                         hit_radius = track.radii[-1]
                         hit_span = silence
-            if hit_pos is None:
+                        hit_dir = incoming
+            if hit_s is None:
                 continue
             track.hit_fired = True
-            # the streak's twin diff chain sees the same impact a beat later
-            # with a slightly different contact estimate - one physical hit
-            now_c = time.monotonic()
-            if any(now_c - t < 0.4
-                   and np.hypot(hit_pos[0] - q[0], hit_pos[1] - q[1]) < 100.0
-                   for t, q in recent_hits_cam):
-                continue
-            # sample color where the ball was last actually seen
-            sample_pos = p[-1] if hit_span >= 1 and silence > 0 else hit_pos
-            hit_pos = (float(hit_pos[0]), float(hit_pos[1]))
 
-            # Transform the hit point plus a point one ball-radius away, so
-            # the game can draw the mark at the ball's real projected size.
+            # camera anchor at the contact observation: used for the ball
+            # radius mapping and for color sampling
+            anchor_idx = max(0, len(p) - 1 - (hit_span if silence == 0 else 0))
+            cam_anchor = p[anchor_idx] if silence == 0 else p[-1]
             mapped = mapper.map_points(
-                [hit_pos, (hit_pos[0] + hit_radius, hit_pos[1])],
+                [cam_anchor, (cam_anchor[0] + hit_radius, cam_anchor[1])],
                 (small.shape[1], small.shape[0]),
             )
-            norm = mapped[0]
-            r_norm = float(np.hypot(*(mapped[1] - mapped[0])))  # fraction of screen width-ish
+            r_norm = float(np.hypot(*(mapped[1] - mapped[0])))
+            # sample the ball color from the contact frame at the contact
+            # point - that is exactly where and when the ball is in view
+            frame_back = min(hit_span + 1, len(recent_frames))
+            color = classify_color(recent_frames[-frame_back], cam_anchor,
+                                   max(4.0, hit_radius), color_defs)
+
+            hit_s = np.array(hit_s, dtype=np.float64)
+            now = time.monotonic()
+            # the streak's twin diff chain sees the same impact a beat later
+            # with a slightly different contact estimate - one physical hit
+            if any(now - t < 0.4 and float(np.hypot(*(hit_s - q))) < 0.18
+                   for t, q in recent_hits_s):
+                continue
+            # back to plain normalized game coordinates
+            norm = np.array([hit_s[0] / screen_aspect, hit_s[1]])
             if not (-0.02 <= norm[0] <= 1.02 and -0.02 <= norm[1] <= 1.02):
                 continue  # outside the projected game area
             norm = np.clip(norm, 0.0, 1.0)
 
             # cooldown: ignore near-duplicate hits (double bounces etc.)
-            now = time.monotonic()
             recent_hits[:] = [
                 (t, pos) for t, pos in recent_hits if (now - t) * 1000.0 < cooldown_ms
             ]
@@ -517,12 +624,6 @@ def main():
                    for _, pos in recent_hits):
                 continue
             recent_hits.append((now, (float(norm[0]), float(norm[1]))))
-
-            # sample the ball color from the contact frame at the contact
-            # point - that is exactly where and when the ball is in view
-            frame_back = min(hit_span + 1, len(recent_frames))
-            color = classify_color(recent_frames[-frame_back], sample_pos,
-                                   max(4.0, hit_radius), color_defs)
 
             packet = {
                 "type": "hit",
@@ -532,11 +633,12 @@ def main():
                 "color": color,
             }
             sock.sendto(json.dumps(packet).encode("utf-8"), udp_addr)
-            recent_hits_cam.append((now, hit_pos))
-            recent_hits_cam[:] = [(t, q) for t, q in recent_hits_cam if now - t < 2.0]
+            recent_hits_s.append((now, hit_s))
+            recent_hits_s[:] = [(t, q) for t, q in recent_hits_s if now - t < 2.0]
             print("HIT", packet)
             if preview:
-                cv2.circle(small, (int(hit_pos[0]), int(hit_pos[1])), 18, (0, 0, 255), 3)
+                cv2.circle(small, (int(cam_anchor[0]), int(cam_anchor[1])),
+                           18, (0, 0, 255), 3)
 
         # --- preview ------------------------------------------------------
         if preview:

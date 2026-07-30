@@ -184,12 +184,17 @@ needs the API key.
   above the measured sensor grain automatically (essential for the PS3
   Eye). Raise `noise_multiplier` if grain still becomes blobs;
   `diff_threshold` is the fixed floor.
-- `min_speed` — minimum ball speed in px/frame; lower it if soft throws
-  are missed.
-- `approach_frames` — a hit needs this many consecutive fast, straight,
-  similar-speed steps before the bounce (default 4). This is the main
-  noise gate: grain and light artifacts cannot fake a real approach.
-  Lower to 3 if genuine hits get missed.
+- `min_speed_norm` — minimum ball speed in screen units per frame
+  (1.0 = screen height; 0.012 at 60 fps is ~1.2 m/s). Lower it if soft
+  throws are missed.
+- `screen_aspect` — physical width/height of the projection (default
+  16:9). All contact physics runs in calibrated screen space, so camera
+  angle and perspective do not affect the thresholds.
+- `approach_frames` — a hit needs up to this many consecutive fast,
+  straight, similar-speed steps before the bounce (default 4; shorter
+  clean windows are accepted when early observations are noisy). This
+  is the main noise gate: grain and light artifacts cannot fake a real
+  approach.
 - `straightness_deg` — how much the approach may wobble (default 45°).
 - `min_turn_deg` — how sharply the trajectory must break at contact
   (default 60°). Raise toward 90 if passing balls false-trigger; lower
