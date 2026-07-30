@@ -108,7 +108,7 @@ def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9,
     return mean, float(np.mean(speeds)), ""
 
 
-def associate(tracks, detections, frame_idx, max_match_dist):
+def associate(tracks, detections, frame_idx, max_match_dist, match_floor=15.0):
     """Match detections to tracks; returns {track_index: detection_index}.
 
     Globally greedy by distance-to-prediction, in TWO passes: tracks with
@@ -139,7 +139,8 @@ def associate(tracks, detections, frame_idx, max_match_dist):
                 pred = (lx + vx * gap, ly + vy * gap)
                 last_speed = np.hypot(vx, vy)
                 allowed = min(max_match_dist,
-                              max(15.0, 12.0 + 2.5 * last_speed))
+                              max(match_floor,
+                                  0.8 * match_floor + 2.5 * last_speed))
             else:
                 pred = track.positions[-1]
                 allowed = max_match_dist
@@ -445,6 +446,13 @@ def main():
     proc_width = det.get("processing_width", 640)
     min_area = det.get("min_area", 30)
     max_area = det.get("max_area", 2500)
+    # With a calibration, all pixel-space constants are DERIVED from the
+    # local image scale (px per screen-height unit), so any reasonable
+    # camera distance and angle works without retuning: the expected ball
+    # blob size comes from the physical ball and screen sizes, the match
+    # radius from how far a ball can travel between frames.
+    auto_scale = det.get("auto_scale", True)
+    ball_diameter_m = det.get("ball_diameter_m", 0.04)
     # minimum ball speed in screen units per frame (1.0 = screen height);
     # 0.012 at 60 fps on a ~1.7 m screen is roughly 1.2 m/s
     min_speed = det.get("min_speed_norm", 0.012)
@@ -578,6 +586,28 @@ def main():
 
         if game_poly is None:
             game_poly = mapper.game_polygon_px((small.shape[1], small.shape[0]))
+            match_floor = 15.0
+            scale_pts, ball_r_grid = None, None
+            if auto_scale:
+                scale_pts, scales = mapper.scale_grid(
+                    (small.shape[1], small.shape[0]), screen_aspect)
+                # expected ball radius in px at each grid point, from the
+                # physical ball and projection sizes
+                ball_r_grid = np.maximum(
+                    1.5, scales * (0.5 * ball_diameter_m / screen_height_m))
+                s_med = float(np.median(scales))
+                # a ball can cross ~12% of the screen height per frame at
+                # most; the floor keeps slow tracks from teleporting
+                max_match_dist = float(np.clip(0.12 * s_med, 30.0, 130.0))
+                match_floor = float(np.clip(0.035 * s_med, 8.0, 25.0))
+                a_lo = 0.35 * np.pi * ball_r_grid ** 2
+                a_hi = 25.0 * np.pi * ball_r_grid ** 2
+                min_area = max(8.0, float(a_lo.min()))
+                max_area = float(a_hi.max())
+                print("auto-scale: px/screen-unit %.0f  ball r %.1f-%.1fpx  "
+                      "match %.0f/%.0fpx  area %.0f-%.0f"
+                      % (s_med, ball_r_grid.min(), ball_r_grid.max(),
+                         match_floor, max_match_dist, min_area, max_area))
 
         if prev_gray is None:
             prev_gray = gray
@@ -618,6 +648,15 @@ def main():
             if m["m00"] <= 0:
                 continue
             center = (m["m10"] / m["m00"], m["m01"] / m["m00"])
+            if ball_r_grid is not None:
+                # size-check against the LOCAL expected ball size: at a
+                # steep angle a valid blob near the camera is many times
+                # larger than one across the screen
+                k = int(np.argmin(((scale_pts - center) ** 2).sum(axis=1)))
+                r_exp = ball_r_grid[k]
+                if not (0.35 * np.pi * r_exp ** 2 <= area
+                        <= 25.0 * np.pi * r_exp ** 2):
+                    continue
             # a fast ball is a motion-blur streak: its narrow side is the
             # ball diameter no matter how fast it flies
             (_, (rw, rh), _) = cv2.minAreaRect(cnt)
@@ -641,7 +680,8 @@ def main():
         # bounce; the duplicate hit is absorbed by the cooldown.)
         # The match radius scales with the track's own speed: a slow track
         # cannot teleport onto an unrelated blob across the frame.
-        assigned = associate(tracks, detections, frame_idx, max_match_dist)
+        assigned = associate(tracks, detections, frame_idx, max_match_dist,
+                             match_floor)
         for ti, i in assigned.items():
             tracks[ti].add(detections[i][0], spts[i],
                            detections[i][1], frame_idx)

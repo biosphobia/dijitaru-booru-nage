@@ -46,6 +46,8 @@ DEFAULT_CONFIG = {
         "min_speed_norm": 0.012,
         "screen_aspect": 1.778,
         "screen_height_m": 2.0,
+        "ball_diameter_m": 0.04,
+        "auto_scale": True,
         "min_turn_deg": 45.0,
         "approach_frames": 4,
         "straightness_deg": 45.0,
@@ -188,6 +190,36 @@ class CalibrationMapper:
         if self._tps is not None:
             out = out + self._tps_eval(pts)
         return out
+
+    def scale_grid(self, frame_size, screen_aspect=16.0 / 9.0, nx=8, ny=5):
+        """Local image scale over the game area: how many current-frame
+        PIXELS one screen-height unit spans at each grid point.
+
+        Lets the tracker derive its pixel-space constants (blob area,
+        match radius) from the calibration instead of hard-coding them,
+        so any camera distance and angle works. Returns (points_px, s):
+        points_px[k] is a grid point in current-frame pixels, s[k] its
+        isotropic px-per-screen-unit scale (homography only - the TPS
+        correction is too small to matter for scale)."""
+        inv = np.linalg.inv(self.homography)
+        fx = frame_size[0] / self.frame_size[0]
+        fy = frame_size[1] / self.frame_size[1]
+        eps = 0.01
+        pts, scales = [], []
+        for v in np.linspace(0.05, 0.95, ny):
+            for u in np.linspace(0.05, 0.95, nx):
+                tri = np.array([[u, v], [u + eps, v], [u, v + eps]],
+                               dtype=np.float64).reshape(-1, 1, 2)
+                px = cv2.perspectiveTransform(tri, inv).reshape(-1, 2)
+                px[:, 0] *= fx
+                px[:, 1] *= fy
+                # game-x spans the WIDTH = aspect * height, so px per
+                # screen-height unit along x is du / aspect
+                du = np.hypot(*(px[1] - px[0])) / eps / screen_aspect
+                dv = np.hypot(*(px[2] - px[0])) / eps
+                pts.append(px[0])
+                scales.append(float(np.sqrt(max(du * dv, 1e-9))))
+        return np.asarray(pts), np.asarray(scales)
 
     def game_polygon_px(self, frame_size):
         """The projected game rectangle's outline in current-camera pixels

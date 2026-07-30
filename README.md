@@ -193,9 +193,22 @@ needs the API key.
     wall. Use this for real play.
   - `"instant"` — fires on the first fast motion it sees. Handy for desk
     testing by waving a ball in front of the camera.
+- `screen_height_m` — the **measured physical height of the projected
+  image in meters**. The single most useful measurement: it drives the
+  gravity correction of hit positions and (with `ball_diameter_m`,
+  default 0.04 for a standard ping pong ball) the expected ball blob
+  size at every camera distance. Measure it once the setup is final.
+- `auto_scale` (default on) — derives all pixel-space tracker constants
+  (blob area bounds, track match radius) from the calibration's local
+  image scale, so any reasonable camera distance and angle works
+  without retuning. Camera distance/angle themselves never need to be
+  entered — the calibration grid captures them. **Re-run calibrate.py
+  whenever the camera or projector moves**, including after final
+  setup.
 - `min_area` / `max_area` — accepted blob size in pixels (at the 640-wide
-  processing scale). A fast ball is a motion-blur *streak*, so blobs are
-  elongated — that is expected and handled.
+  processing scale); only used as fallback when `auto_scale` is off or
+  no calibration exists. A fast ball is a motion-blur *streak*, so blobs
+  are elongated — that is expected and handled.
 - `auto_threshold` / `noise_multiplier` — the motion threshold floats
   above the measured sensor grain automatically (essential for the PS3
   Eye). Raise `noise_multiplier` if grain still becomes blobs;
