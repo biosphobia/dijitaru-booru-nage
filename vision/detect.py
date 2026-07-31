@@ -61,14 +61,17 @@ class Track:
         self.last_seen = frame_idx
 
 
-def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=1.9,
+def consistent_direction(velocities, min_speed, straight_cos, adj_ratio=2.8,
                          noise=0.006):
     """If the per-frame velocities look like a real ball in flight, return
     the mean direction (unit vector) and mean speed; else (None, reason).
 
     A real thrown ball moves fast, straight, and with smoothly changing
     speed (perspective and drag decelerate it gradually) - sensor grain and
-    chained flicker artifacts do none of that.
+    chained flicker artifacts do none of that. The adjacent-step ratio is
+    generous (2.8x) because a FAST ball's faint streak often fragments:
+    when only part of the streak is detected, the centroid lands anywhere
+    along it and apparent speed jumps 2-3x while the direction stays true.
 
     Both consistency tests are NOISE-AWARE, because blob centroids jitter
     by a fixed amount (`noise`, in screen units) regardless of speed: a
@@ -196,7 +199,7 @@ def evaluate_contact(p, f, radii, cfg):
             if idx > best_stage:
                 best_stage, best_reason = idx, reason
 
-        if f[-1] - f[e] > (n - 1 - e) + 2:
+        if f[-1] - f[e] > (n - 1 - e) + 3:
             fail("gap", "bounce-out had missed frames")
             continue
         # Try the full approach window first, then shorter ones: a track's
@@ -210,10 +213,10 @@ def evaluate_contact(p, f, radii, cfg):
         for alen in range(cfg["approach"], cfg.get("min_alen", 2) - 1, -1):
             if e - alen < 0:
                 continue  # window does not fit; a shorter one may
-            # approach must be a near-gap-free frame run (two misses
-            # allowed; velocities are per-frame, so gaps do not distort
-            # speeds)
-            if f[e] - f[e - alen] > alen + 2:
+            # approach must be a near-gap-free frame run (three misses
+            # allowed - fast faint streaks drop frames; velocities are
+            # per-frame, so gaps do not distort speeds)
+            if f[e] - f[e - alen] > alen + 3:
                 why = why or "approach had missed frames"
                 continue
             cand = [(p[i + 1] - p[i]) / max(1, f[i + 1] - f[i])
@@ -520,7 +523,10 @@ def main():
     emerge_approach = det.get("emerge_approach_steps", 4)
     emerge_min_speed = det.get("emerge_min_speed_norm", min_speed * 2.0)
     emerge_lead = det.get("emerge_lead", 0.75)        # steps before first obs
-    base_threshold = det.get("diff_threshold", 25)
+    # a FAST ball's streak is faint (its light spreads along the smear),
+    # so the fixed floor sits low; the auto threshold still floats above
+    # the measured grain, which is what actually rejects noise
+    base_threshold = det.get("diff_threshold", 18)
     auto_threshold = det.get("auto_threshold", True)
     noise_multiplier = det.get("noise_multiplier", 6.0)
     cooldown_ms = det.get("cooldown_ms", 250)
@@ -604,9 +610,9 @@ def main():
                 ball_r_grid = np.maximum(
                     1.5, scales * (0.5 * ball_diameter_m / screen_height_m))
                 s_med = float(np.median(scales))
-                # a ball can cross ~12% of the screen height per frame at
-                # most; the floor keeps slow tracks from teleporting
-                max_match_dist = float(np.clip(0.12 * s_med, 30.0, 130.0))
+                # a hard throw can cross ~20% of the screen height per
+                # frame; the floor keeps slow tracks from teleporting
+                max_match_dist = float(np.clip(0.20 * s_med, 40.0, 220.0))
                 match_floor = float(np.clip(0.035 * s_med, 8.0, 25.0))
                 a_lo = 0.35 * np.pi * ball_r_grid ** 2
                 a_hi = 25.0 * np.pi * ball_r_grid ** 2
@@ -766,7 +772,7 @@ def main():
                     start = len(s) - 1 - emerge_approach
                     fq = list(track.frames)
                     now_t = time.monotonic()
-                    if fq[-1] - fq[start] <= emerge_approach + 2:
+                    if fq[-1] - fq[start] <= emerge_approach + 3:
                         vels = [(s[i + 1] - s[i]) / max(1, fq[i + 1] - fq[i])
                                 for i in range(start, len(s) - 1)]
                         outgoing, speed, _ = consistent_direction(
@@ -833,7 +839,7 @@ def main():
                 f = list(track.frames)
                 incoming, speed = None, 0.0
                 for va, mult in vanish_windows:
-                    if len(s) < va + 1 or f[-1] - f[-1 - va] > va + 2:
+                    if len(s) < va + 1 or f[-1] - f[-1 - va] > va + 3:
                         continue
                     vels = [(s[i + 1] - s[i]) / max(1, f[i + 1] - f[i])
                             for i in range(len(s) - 1 - va, len(s) - 1)]

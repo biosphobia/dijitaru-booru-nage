@@ -38,7 +38,7 @@ DEFAULT_CONFIG = {
     "detection": {
         "mode": "reversal",
         "processing_width": 640,
-        "diff_threshold": 25,
+        "diff_threshold": 18,
         "auto_threshold": True,
         "noise_multiplier": 6.0,
         "min_area": 30,
