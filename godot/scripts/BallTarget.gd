@@ -18,8 +18,8 @@ signal expired
 const GROUP := "ball_targets"
 ## Fallback extra hit radius as a fraction of screen width, used when the
 ## tuning file has nothing to say. This is the throw-error budget: at 1280
-## wide it is ~77 px of slack, on top of the drawn radius.
-const TOLERANCE_FRAC := 0.06
+## wide it is 128 px of slack, on top of the drawn radius.
+const TOLERANCE_FRAC := 0.10
 const POP_TIME := 0.22
 const GROW_TIME := 0.18
 
@@ -92,6 +92,11 @@ func ball_center() -> Vector2:
 
 func ball_hit_radius() -> float:
 	return hit_radius()
+
+## The circle the player actually SEES and aims at; the picker measures
+## from its edge, so a visibly-closer small target beats a big one.
+func ball_draw_radius() -> float:
+	return radius
 
 func is_ball_active() -> bool:
 	return not _taken and not is_queued_for_deletion() \

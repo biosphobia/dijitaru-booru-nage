@@ -95,15 +95,18 @@ func _process(_delta: float) -> void:
 			target.take()
 		_send_click(pos, color, radius_px, target != null)
 
-## Throws land off the aim point, so a hit near a target counts as a hit on
-## it: the target whose hit area covers the impact wins (the closest one
-## relative to its own size when several do). Nodes in the `ball_targets`
-## group opt in by providing ball_center() / ball_hit_radius() /
-## is_ball_active() / take() - see BallTarget.gd. Returns null when the
-## impact is not near any target.
+## Throws land off the aim point, so a hit near a target counts as a hit
+## on it. Eligible = the target's hit area covers the impact; among those
+## the winner is the one whose VISIBLE edge is closest to the impact -
+## players aim at what they see, so a small alien right next to the ball
+## must beat a big one whose halo merely reaches further. Nodes in the
+## `ball_targets` group opt in by providing ball_center() /
+## ball_hit_radius() / is_ball_active() / take() (and optionally
+## ball_draw_radius()) - see BallTarget.gd. Returns null when the impact
+## is not near any target.
 func pick_target(pos: Vector2) -> Node:
 	var best: Node = null
-	var best_score := 1.0
+	var best_edge := INF
 	for node in get_tree().get_nodes_in_group("ball_targets"):
 		if not node.has_method("ball_hit_radius") or not node.has_method("is_ball_active"):
 			continue
@@ -112,9 +115,14 @@ func pick_target(pos: Vector2) -> Node:
 		var radius: float = node.ball_hit_radius()
 		if radius <= 0.0:
 			continue
-		var score: float = node.ball_center().distance_to(pos) / radius
-		if score <= best_score:
-			best_score = score
+		var dist: float = node.ball_center().distance_to(pos)
+		if dist > radius:
+			continue
+		var drawn: float = node.ball_draw_radius() \
+			if node.has_method("ball_draw_radius") else 0.0
+		var edge := dist - drawn
+		if edge < best_edge:
+			best_edge = edge
 			best = node
 	return best
 
