@@ -20,6 +20,9 @@ var max_hp := 1
 var coin_value := 1
 var fall_speed := 60.0   # px per second, downward
 var ship_y := 600.0
+## Surface height at a given x, so aliens land on the planet's curve
+## instead of a flat line across the screen. Falls back to ship_y.
+var ground_y_at := Callable()
 var hit_damage := 1
 var shielded := false
 var frozen := 0.0        # seconds left of the time-stop upgrade
@@ -80,7 +83,7 @@ func _process(delta: float) -> void:
 	if _sway_amp > 0.0:
 		_sway += delta * 1.7
 		position.x = _base_x + sin(_sway) * _sway_amp
-	if position.y >= ship_y:
+	if position.y >= _landing():
 		_taken = true
 		input_pickable = false
 		escaped.emit()
@@ -150,13 +153,16 @@ func _draw() -> void:
 	if shielded:
 		draw_arc(Vector2.ZERO, radius * 1.18, PI * 0.15, PI * 0.85, 32,
 			SHIELD_COLOR, 9.0)
-	# close to the hull: ring the alarm so the player knows what to hit next
-	if position.y > ship_y - radius * 2.4:
+	# close to the school: ring the alarm so the player knows what to hit next
+	if position.y > _landing() - radius * 2.4:
 		var pulse := 0.5 + 0.5 * sin(_age * 9.0)
 		draw_arc(Vector2.ZERO, radius * 1.3, 0.0, TAU, 40,
 			Color(1.0, 0.2, 0.15, 0.55 + 0.45 * pulse), 9.0)
 	if max_hp > 1:
 		_draw_hp()
+
+func _landing() -> float:
+	return ground_y_at.call(position.x) if ground_y_at.is_valid() else ship_y
 
 func _draw_alien(body: Color) -> void:
 	var wobble := 1.0 + 0.04 * sin(_age * 3.0)

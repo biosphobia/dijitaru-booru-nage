@@ -17,7 +17,9 @@ const VOICES := 10
 ## name -> what it is used for (also written into the folder's README).
 const IMAGES := {
 	"background": "full-screen space background",
-	"cockpit": "cockpit frame, drawn across the bottom of the screen",
+	"ground": "the planet across the bottom of the screen",
+	"school": "the school building standing on the planet",
+	"logo": "the school name plate (ships with the game)",
 	"title": "title logo, replaces the title text",
 	"enemy_grunt": "basic alien",
 	"enemy_swift": "fast little alien",

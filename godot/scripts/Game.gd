@@ -1,11 +1,12 @@
 extends Node2D
-## Space Booru Nage - the game itself.
+## Dijitaru Booru Nage - the game itself.
 ##
-## You are in the ship. Aliens drift down towards you; a blue ping pong ball
-## damages the one it lands nearest, an orange one detonates and clears the
-## screen. Survive the wave, take a coin payout, and every few waves pick
-## one of two upgrades. Coins are what the stall pays out in sweets, so the
-## early waves are gentle and the later ones are not.
+## Aliens drift down towards the school standing on Earth at the bottom of
+## the screen. A blue ping pong ball damages the alien it lands nearest, an
+## orange one detonates and clears the screen. Survive the level, take a
+## coin payout, and every few levels pick one of two upgrades. Coins are
+## what the stall pays out in sweets, so the early levels are gentle and the
+## later ones are not.
 ##
 ## Everything a player has to hit is a BallTarget, so a throw only has to
 ## land close (see BallTarget.hit_radius). Difficulty, payouts and sizes are
@@ -15,8 +16,11 @@ extends Node2D
 ## States: TITLE -> INTRO -> PLAY -> (UPGRADE) -> INTRO ... -> RESULT
 
 const CFG_PATH := "user://game.cfg"
-## Where the ship is: aliens that get past this line hit the hull.
-const SHIP_LINE := 0.86
+## Where the planet is: the surface peaks here in the middle of the screen
+## and curves away to the sides (Ground.ground_y). Aliens that reach it hit
+## the school. Speeds are derived from a crossing time, not a distance, so
+## moving this line does not change the difficulty.
+const SHIP_LINE := 0.8
 
 const COIN_COLOR := Color(1.0, 0.84, 0.3)
 const FIRE_COLOR := Color(1.0, 0.55, 0.15)
@@ -48,6 +52,7 @@ var run := Run.new()
 var best_coins := 0
 var best_wave := 0
 
+var _ground: Ground       # the planet, the school, the name plate
 var _field: Node2D        # aliens, explosions, everything that shakes
 var _screen: Node2D       # title / upgrade / result furniture
 var _hud: Hud
@@ -77,9 +82,9 @@ func _ready() -> void:
 	_screen = Node2D.new()
 	add_child(_screen)
 
-	var cockpit := Cockpit.new()
-	cockpit.z_index = 6
-	add_child(cockpit)
+	_ground = Ground.new()
+	_ground.z_index = 6
+	add_child(_ground)
 
 	var hud_layer := CanvasLayer.new()
 	hud_layer.layer = 2
@@ -321,6 +326,7 @@ func _spawn(type: String, at := Vector2.INF) -> Enemy:
 	var enemy := Enemy.new().setup(type, r,
 		(ship + r) / _cross_time * float(stats.get("speed", 1.0)) * run.slow)
 	enemy.ship_y = ship
+	enemy.ground_y_at = _ground.ground_y
 	enemy.hit_damage = run.damage
 	enemy.tolerance_bonus = run.tolerance_bonus
 	enemy.frozen = _freeze_left
@@ -375,7 +381,7 @@ func _on_enemy_escaped(enemy: Enemy) -> void:
 	var text := Effects.FloatText.new()
 	text.text = "装甲 -1"
 	text.color = Color(1.0, 0.4, 0.4)
-	text.position = Vector2(enemy.position.x, get_viewport_rect().size.y * SHIP_LINE - 40.0)
+	text.position = Vector2(enemy.position.x, _ground.ground_y(enemy.position.x) - 40.0)
 	_field.add_child(text)
 	_hud.set_run(run)
 	if run.hull <= 0:
@@ -648,9 +654,27 @@ class Hud extends Node2D:
 		_wave_label.position = Vector2(vp.x - _wave_label.size.x - vp.x * 0.03, vp.y * 0.02)
 		queue_redraw()
 
+	## Dark plate behind a readout. The HUD sits over the planet and over
+	## whatever art gets dropped in later, so it cannot rely on what is
+	## behind it for contrast.
+	func _plate(rect: Rect2, pad: float) -> void:
+		draw_rect(rect.grow(pad), Color(0.04, 0.05, 0.11, 0.8))
+
 	func _draw() -> void:
 		var vp := get_viewport_rect().size
 		var size := minf(vp.x, vp.y) * 0.075
+		var r := size * 0.36
+		var row := vp.y * 0.905
+		# plates first, everything else on top
+		_plate(Rect2(_wave_label.position, _wave_label.size), size * 0.16)
+		_plate(Rect2(Vector2(vp.x * 0.035 - r, vp.y * 0.02 + size * 0.55 - r),
+			Vector2(r * 2.0, r * 2.0)).merge(
+			Rect2(_coins_label.position, _coins_label.size)), size * 0.16)
+		_plate(Rect2(vp.x * 0.04 - r, row - r,
+			(max_hull - 1) * r * 2.6 + r * 2.0, r * 2.0), size * 0.14)
+		if fireballs > 0:
+			_plate(Rect2(vp.x * 0.96 - (fireballs - 1) * r * 2.6 - r, row - r,
+				(fireballs - 1) * r * 2.6 + r * 2.0, r * 2.0), size * 0.14)
 		# coin
 		var coin_at := Vector2(vp.x * 0.035, vp.y * 0.02 + size * 0.55)
 		var coin_tex := Assets.texture("coin")
@@ -662,9 +686,8 @@ class Hud extends Node2D:
 			draw_arc(coin_at, size * 0.36, 0.0, TAU, 32, Color.WHITE, 3.0)
 		# hull, bottom left
 		var heart_tex := Assets.texture("heart")
-		var r := size * 0.36
 		for i in max_hull:
-			var at := Vector2(vp.x * 0.04 + i * r * 2.6, vp.y * 0.905)
+			var at := Vector2(vp.x * 0.04 + i * r * 2.6, row)
 			var on := i < hull
 			if heart_tex != null:
 				_stamp(heart_tex, at, r * 2.2, Color(1, 1, 1, 1.0 if on else 0.22))
@@ -678,7 +701,7 @@ class Hud extends Node2D:
 					draw_arc(at, r, 0.0, TAU, 28, Color(0.55, 0.62, 0.7), 4.0)
 		# fireballs, bottom right
 		for i in fireballs:
-			var at := Vector2(vp.x - vp.x * 0.04 - i * r * 2.6, vp.y * 0.905)
+			var at := Vector2(vp.x * 0.96 - i * r * 2.6, row)
 			draw_circle(at, r, FIRE_COLOR)
 			draw_circle(at + Vector2(-r * 0.25, -r * 0.25), r * 0.3, Color(1, 1, 1, 0.9))
 			draw_arc(at, r, 0.0, TAU, 28, Color.WHITE, 3.0)
@@ -687,29 +710,112 @@ class Hud extends Node2D:
 		draw_texture_rect(tex, Rect2(at - Vector2(side, side) / 2.0, Vector2(side, side)),
 			false, tint)
 
-## The band along the bottom that the aliens must not reach.
-class Cockpit extends Node2D:
+## Earth across the bottom with the school standing on it - what the aliens
+## are coming for, and what the hull counter is protecting.
+##
+## `ground_y` is the single source of truth for the surface: the planet, the
+## school and the aliens' landing point all read it, so the curve stays one
+## number to change. A `ground` / `school` / `logo` image in game_assets
+## replaces any of the three drawings.
+class Ground extends Node2D:
+	## Planet radius as a fraction of screen width: big, so the horizon is a
+	## gentle curve rather than a ball.
+	const RADIUS_FRAC := 0.9
+	const LOGO := preload("res://assets/yell_gakuen_logo.png")
+
+	const OCEAN := Color(0.11, 0.33, 0.62)
+	const LAND := Color(0.22, 0.62, 0.35)
+	const RIM := Color(0.55, 0.95, 1.0)
+	const BRAND := Color(0.03, 0.36, 0.25)
+	const WALL := Color(0.96, 0.95, 0.88)
+	const WINDOW := Color(0.45, 0.85, 1.0)
+	## angle from straight up, depth below the surface, radius - all as
+	## fractions of screen width except the angle (radians)
+	const CONTINENTS := [
+		[-0.34, 0.075, 0.062], [-0.09, 0.060, 0.048],
+		[0.17, 0.090, 0.074], [0.41, 0.065, 0.052],
+	]
+
 	func _ready() -> void:
 		get_viewport().size_changed.connect(queue_redraw)
+
+	## Height of the surface at screen x. Aliens land here, not on a flat
+	## line, or they would blow up in mid-air out at the edges.
+	func ground_y(x: float) -> float:
+		var vp := get_viewport_rect().size
+		var r := vp.x * RADIUS_FRAC
+		var dx := clampf(x - vp.x * 0.5, -r, r)
+		return vp.y * SHIP_LINE + r - sqrt(maxf(r * r - dx * dx, 0.0))
 
 	func _draw() -> void:
 		var vp := get_viewport_rect().size
 		var top := vp.y * SHIP_LINE
-		var tex := Assets.texture("cockpit")
+		var tex := Assets.texture("ground")
 		if tex != null:
 			draw_texture_rect(tex, Rect2(Vector2(0, top), Vector2(vp.x, vp.y - top)), false)
+		else:
+			var r := vp.x * RADIUS_FRAC
+			var center := Vector2(vp.x * 0.5, top + r)
+			draw_circle(center, r, OCEAN)
+			for c in CONTINENTS:
+				var at := center + Vector2.UP.rotated(float(c[0])) * (r - vp.x * float(c[1]))
+				draw_circle(at, vp.x * float(c[2]), LAND)
+			# atmosphere: the brightest line on screen, so the danger line is
+			# unmistakable from the back of a lit room
+			draw_arc(center, r, -PI / 2.0 - 0.7, -PI / 2.0 + 0.7, 96, RIM, 8.0)
+		_draw_school(vp)
+		_draw_sign(vp)
+
+	func _draw_school(vp: Vector2) -> void:
+		var w := vp.x * 0.15
+		var h := vp.y * 0.1
+		var base := ground_y(vp.x * 0.5)
+		var body := Rect2(vp.x * 0.5 - w / 2.0, base - h, w, h)
+		var tex := Assets.texture("school")
+		if tex != null:
+			draw_texture_rect(tex, Rect2(body.position - Vector2(0, h * 0.35),
+				Vector2(w, h * 1.35)), false)
 			return
-		var height := vp.y - top
-		draw_rect(Rect2(Vector2(0, top), Vector2(vp.x, height)), Color(0.13, 0.19, 0.34))
-		draw_line(Vector2(0, top), Vector2(vp.x, top), Color(0.5, 0.9, 1.0), 8.0)
-		# console in the middle, clear of the hull and fireball readouts
-		var console := Rect2(vp.x * 0.36, top + height * 0.22, vp.x * 0.28, height * 0.6)
-		draw_rect(console, Color(0.07, 0.10, 0.18))
-		draw_rect(console, Color(0.5, 0.85, 1.0), false, 3.0)
-		for i in 5:
-			var at := Vector2(console.position.x + console.size.x * (0.14 + 0.18 * i),
-				console.position.y + console.size.y * 0.5)
-			draw_circle(at, height * 0.075, Color(0.45, 0.85, 1.0, 0.75 + 0.05 * i))
+		var roof := h * 0.32
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(body.position.x - w * 0.07, body.position.y),
+			Vector2(body.end.x + w * 0.07, body.position.y),
+			Vector2(body.end.x - w * 0.14, body.position.y - roof),
+			Vector2(body.position.x + w * 0.14, body.position.y - roof),
+		]), BRAND)
+		draw_rect(body, WALL)
+		draw_rect(body, Color.WHITE, false, 3.0)
+		for row in 2:
+			for col in 4:
+				var pane := Rect2(
+					body.position.x + w * (0.1 + 0.21 * col),
+					body.position.y + h * (0.16 + 0.34 * row),
+					w * 0.13, h * 0.2)
+				draw_rect(pane, WINDOW)
+		var door := Rect2(vp.x * 0.5 - w * 0.07, base - h * 0.3, w * 0.14, h * 0.3)
+		draw_rect(door, BRAND)
+
+	## The school's name plate, standing on the planet under the building.
+	func _draw_sign(vp: Vector2) -> void:
+		var logo: Texture2D = Assets.texture("logo")
+		if logo == null:
+			logo = LOGO
+		var band := vp.y - vp.y * SHIP_LINE
+		var height := band * 0.58
+		var width := height * float(logo.get_width()) / float(logo.get_height())
+		if width > vp.x * 0.34:
+			width = vp.x * 0.34
+			height = width * float(logo.get_height()) / float(logo.get_width())
+		var pad := height * 0.13
+		var top := ground_y(vp.x * 0.5 - width * 0.5 - pad) + band * 0.1
+		var rect := Rect2(vp.x * 0.5 - width / 2.0, top + pad, width, height)
+		var panel := Rect2(rect.position - Vector2(pad, pad),
+			rect.size + Vector2(pad, pad) * 2.0)
+		# white board: the logo's greens are dark, and dark on dark is gone
+		# the moment the room lights are on
+		draw_rect(panel, Color.WHITE)
+		draw_rect(panel, BRAND, false, 4.0)
+		draw_texture_rect(logo, rect, false)
 
 ## Title-screen ball key: blue on the left, orange on the right, drawn big
 ## enough to read across a bright room.

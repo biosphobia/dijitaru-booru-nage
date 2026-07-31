@@ -2,11 +2,12 @@
 
 Throw ping pong balls at a wall, hit targets in a projected Godot game.
 
-**デジタルボール投げ** — you are inside a spaceship and aliens are drifting
-down towards you. A **blue** ball damages the alien it lands nearest; an
-**orange** ball is a fireball that detonates and clears the screen. Clear a
-level, collect coins, and every third level choose one of two upgrades.
-Coins are the payout: at a stall they buy sweets.
+**デジタルボール投げ** — aliens are drifting down towards エール学園, the
+school standing on the Earth across the bottom of the screen. A **blue**
+ball damages the alien it lands nearest; an **orange** ball is a fireball
+that detonates and clears the screen. Clear a level, collect coins, and
+every third level choose one of two upgrades. Coins are the payout: at a
+stall they buy sweets.
 
 The whole game is played by throwing — there is nothing to click, not even
 to start. Every target has a hit area noticeably larger than the circle you
@@ -22,7 +23,7 @@ disappears the moment the room is not dark.
   points budget, so they never run out. New alien types unlock as you go:
   fast little ones, armoured ones that need three hits, splitters,
   shielded ones, and a boss every fifth level.
-- **Hull**: five hits. An alien that reaches the ship costs one; the run
+- **Hull**: five hits. An alien that reaches the school costs one; the run
   ends when the hull is gone, and the result screen shows the coin total in
   large type for whoever is paying out.
 - **Fireballs**: the player starts with 5 orange balls. Some upgrades hand
@@ -202,9 +203,10 @@ missing keeps the built-in look, so an empty folder is a working game.
 
 ```
 game_assets/
-  images/   background, cockpit, title, enemy_grunt, enemy_swift,
-            enemy_armor, enemy_splitter, enemy_shield, enemy_mini,
-            enemy_boss, explosion, fireball, coin, heart, target
+  images/   background, ground, school, logo, title, enemy_grunt,
+            enemy_swift, enemy_armor, enemy_splitter, enemy_shield,
+            enemy_mini, enemy_boss, explosion, fireball, coin, heart,
+            target
   sounds/   start, wave, hit, kill, miss, fireball, hull, upgrade,
             gameover, music
 ```
@@ -229,15 +231,15 @@ calls 「レベル」):
 
 | key | what it does |
 | --- | --- |
-| `run.hull` | hits the ship survives (5) |
+| `run.hull` | hits the school survives (5) |
 | `run.fireballs` | orange balls the player starts with (5) |
 | `run.upgrade_every` | a choice of upgrades every N levels (3) |
 | `coins.multiplier` | scales every payout at once — the prize dial |
 | `waves.budget_base` / `budget_per_wave` | how many aliens level 1 has, and how fast that grows |
-| `waves.cross_time_start` / `_step` / `_min` | seconds an alien takes to reach the ship, and how much faster each level gets |
+| `waves.cross_time_start` / `_step` / `_min` | seconds an alien takes to reach the school, and how much faster each level gets |
 | `waves.max_alive_start` / `_max` | how many can be on screen at once |
 | `waves.boss_every` | boss level every N levels (0 = never) |
-| `aim.tolerance` | throw slack, as a fraction of screen width (0.06 ≈ 77 px at 1280) — raise it if the room is unforgiving |
+| `aim.tolerance` | throw slack, as a fraction of screen width (0.075 ≈ 96 px at 1280) — raise it if the room is unforgiving |
 | `enemies.<type>` | per-alien hp, radius, coins, speed, and which level it first appears in |
 
 **Too hard for the queue?** Raise `run.hull`, raise `aim.tolerance`, raise

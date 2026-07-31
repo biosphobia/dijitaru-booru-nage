@@ -41,7 +41,7 @@ const DEFAULTS := {
 		"wave_speed": 1600.0,    # px/s the blast front travels
 	},
 	"aim": {
-		"tolerance": 0.06,       # extra hit radius, fraction of screen width
+		"tolerance": 0.075,      # extra hit radius, fraction of screen width
 	},
 	## radius is a fraction of the screen's short side; speed scales the
 	## wave's cross time; cost is what the enemy takes out of the wave
